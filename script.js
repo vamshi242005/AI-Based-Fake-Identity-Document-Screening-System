@@ -460,6 +460,11 @@ function displayPredictions(predictions, durationMs = 0) {
         fakeScoreEl.textContent = `${fakePct}%`;
         fakeBarEl.style.width = `${fakePct}%`;
     }
+
+    // Trigger AI Chatbot panel activation (ONLY if FAKE)
+    if (typeof handleChatbotVisibility === "function") {
+        handleChatbotVisibility(topNormClass, docConfig.label, topScorePercent);
+    }
 }
 
 /* ==========================================================================
@@ -490,5 +495,8 @@ function resetResultsUI() {
     resultsContent.style.display = 'none';
     resultsLoading.style.display = 'none';
     inferenceTimeBadge.style.display = 'none';
+    if (typeof hideChatbotPanel === "function") {
+        hideChatbotPanel();
+    }
     clearError();
 }

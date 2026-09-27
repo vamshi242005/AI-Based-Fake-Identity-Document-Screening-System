@@ -219,6 +219,37 @@
                         <div id="dynamic-classes-container"></div>
                     </div>
 
+                    <!-- AI Security Chatbot Panel (Activated ONLY for FAKE results) -->
+                    <div class="chatbot-panel" id="chatbot-panel" style="display: none;">
+                        <div class="chatbot-header">
+                            <div class="chatbot-title">
+                                <i class="fa-solid fa-robot chatbot-avatar-icon"></i>
+                                <div>
+                                    <h3>AI Document Security Assistant</h3>
+                                    <span class="chatbot-subtitle">Powered by Google Gemini AI</span>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" id="explain-trigger-btn" onclick="requestFakeExplanation()">
+                                <i class="fa-solid fa-wand-magic-sparkles"></i> Why was this flagged as fake?
+                            </button>
+                        </div>
+
+                        <!-- Chat Messages Container -->
+                        <div class="chat-messages" id="chat-messages">
+                            <div class="chat-bubble bot-bubble hint-bubble" id="chat-hint">
+                                <i class="fa-solid fa-circle-info"></i> Click <strong>"Why was this flagged as fake?"</strong> above to generate an AI explanation of potential red flags.
+                            </div>
+                        </div>
+
+                        <!-- Chat Input Controls -->
+                        <div class="chat-input-row" id="chat-input-row">
+                            <input type="text" id="chat-user-input" placeholder="Ask a follow-up question about this document..." onkeypress="handleChatKeyPress(event)">
+                            <button class="btn btn-primary" id="chat-send-btn" onclick="sendUserChatMessage()">
+                                <i class="fa-solid fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Input Image Details & Model Metadata -->
                     <div class="model-meta-footer">
                         <div class="meta-item">
@@ -236,11 +267,12 @@
         <canvas id="hidden-canvas" style="display: none;" width="224" height="224"></canvas>
 
         <footer class="app-footer">
-            <p>Powered by TensorFlow.js & Teachable Machine &bull; Multi-Model Document Verification</p>
+            <p>Powered by TensorFlow.js, Teachable Machine & Google Gemini AI &bull; Multi-Model Document Verification</p>
         </footer>
     </div>
 
-    <!-- Application Script -->
+    <!-- Application Scripts -->
+    <script src="chatbot.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
