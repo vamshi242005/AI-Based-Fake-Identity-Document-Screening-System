@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Document Verification - Aadhaar, PAN Card & Passport Detection</title>
+    <title>AI Document Verification - Aadhaar, PAN Card, Passport & Voter ID</title>
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -27,7 +27,7 @@
                 </div>
                 <div>
                     <h1>AI Document Verification</h1>
-                    <p class="subtitle">Multi-Model Classification &bull; Aadhaar, PAN Card & Passport Detection</p>
+                    <p class="subtitle">Multi-Model Classification &bull; Aadhaar, PAN Card, Passport & Voter ID</p>
                 </div>
             </div>
 
@@ -51,10 +51,11 @@
         <main class="main-layout">
             <!-- Left Side: Input & Media Section -->
             <section class="card input-section">
-                <!-- Document Type Selector -->
+                <!-- Data-Driven Document Type Selector -->
                 <div class="doc-selector-container">
                     <label class="section-label"><i class="fa-solid fa-id-card"></i> Select Document Type</label>
-                    <div class="doc-tabs">
+                    <div class="doc-tabs" id="doc-tabs-container">
+                        <!-- Populated dynamically via script.js from DOC_TYPES registry -->
                         <button class="doc-btn active" id="doc-aadhaar-btn" onclick="selectDocumentType('aadhaar')">
                             <i class="fa-solid fa-address-card"></i> Aadhaar Card
                         </button>
@@ -63,6 +64,9 @@
                         </button>
                         <button class="doc-btn" id="doc-passport-btn" onclick="selectDocumentType('passport')">
                             <i class="fa-solid fa-passport"></i> Passport
+                        </button>
+                        <button class="doc-btn" id="doc-voterid-btn" onclick="selectDocumentType('voterid')">
+                            <i class="fa-solid fa-check-to-slot"></i> Voter ID Card
                         </button>
                     </div>
                 </div>

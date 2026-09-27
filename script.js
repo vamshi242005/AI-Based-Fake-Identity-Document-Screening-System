@@ -1,6 +1,6 @@
 /**
  * Multi-Document Teachable Machine Classification Script
- * Document Types: Aadhaar Card, PAN Card & Passport
+ * Document Types: Aadhaar Card, PAN Card, Passport & Voter ID
  */
 
 // SESSION GUARD: Protect route if user is not authenticated
@@ -10,7 +10,7 @@
     }
 })();
 
-// Document Registry Configuration
+// Data-Driven Document Registry Configuration
 const DOC_TYPES = {
     aadhaar: {
         id: "aadhaar",
@@ -32,12 +32,19 @@ const DOC_TYPES = {
         icon: "fa-passport",
         modelPath: "./model-passport/",
         resultTitle: "Passport Check Result"
+    },
+    voterid: {
+        id: "voterid",
+        label: "Voter ID Card",
+        icon: "fa-check-to-slot",
+        modelPath: "./model-voterid/",
+        resultTitle: "Voter ID Check Result"
     }
 };
 
 // Application State
 let currentDocType = "aadhaar";
-const loadedModels = {}; // Model cache map { aadhaar: model, pancard: model, passport: model }
+const loadedModels = {}; // Cache map for all loaded models { aadhaar, pancard, passport, voterid }
 let webcamStream = null;
 let isLivePredicting = false;
 let livePredictAnimationFrame = null;
@@ -90,10 +97,27 @@ document.addEventListener("DOMContentLoaded", () => {
         userDisplayName.textContent = currentUser;
     }
 
+    renderDocTypeTabs();
     preloadAllModels();
     setupDropZone();
     setupFileInput();
 });
+
+/**
+ * Dynamically renders document selector tabs from DOC_TYPES registry
+ */
+function renderDocTypeTabs() {
+    const container = document.getElementById("doc-tabs-container");
+    if (!container) return;
+
+    container.innerHTML = Object.values(DOC_TYPES).map(doc => `
+        <button class="doc-btn ${doc.id === currentDocType ? 'active' : ''}" 
+                id="doc-${doc.id}-btn" 
+                onclick="selectDocumentType('${doc.id}')">
+            <i class="fa-solid ${doc.icon}"></i> ${doc.label}
+        </button>
+    `).join('');
+}
 
 // Logout Session Function
 function logout() {
@@ -393,7 +417,7 @@ async function classifyActiveImage() {
 }
 
 /**
- * Normalizes labels (e.g., "ORIGINAL PASSPORT" -> "ORIGINAL", "FAKE PASSPORT" -> "FAKE")
+ * Normalizes labels (e.g., "ORIGINAL VOTEID" -> "ORIGINAL", "FAKE VOTEID" -> "FAKE")
  */
 function normalizeClassName(rawLabel) {
     if (!rawLabel) return "UNKNOWN";
