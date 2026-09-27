@@ -1,6 +1,6 @@
 /**
  * Multi-Document Teachable Machine Classification Script
- * Document Types: Aadhaar Card & PAN Card
+ * Document Types: Aadhaar Card, PAN Card & Passport
  */
 
 // SESSION GUARD: Protect route if user is not authenticated
@@ -25,12 +25,19 @@ const DOC_TYPES = {
         icon: "fa-id-card",
         modelPath: "./model-pancard/",
         resultTitle: "PAN Card Check Result"
+    },
+    passport: {
+        id: "passport",
+        label: "Passport",
+        icon: "fa-passport",
+        modelPath: "./model-passport/",
+        resultTitle: "Passport Check Result"
     }
 };
 
 // Application State
 let currentDocType = "aadhaar";
-const loadedModels = {}; // Model cache map { aadhaar: model, pancard: model }
+const loadedModels = {}; // Model cache map { aadhaar: model, pancard: model, passport: model }
 let webcamStream = null;
 let isLivePredicting = false;
 let livePredictAnimationFrame = null;
@@ -386,7 +393,7 @@ async function classifyActiveImage() {
 }
 
 /**
- * Normalizes labels (e.g., "ORIGINAL PAN" -> "ORIGINAL", " FAKE PAN" -> "FAKE")
+ * Normalizes labels (e.g., "ORIGINAL PASSPORT" -> "ORIGINAL", "FAKE PASSPORT" -> "FAKE")
  */
 function normalizeClassName(rawLabel) {
     if (!rawLabel) return "UNKNOWN";

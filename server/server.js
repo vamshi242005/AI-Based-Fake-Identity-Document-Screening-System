@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 // Strict Persona & System Instruction
-const SYSTEM_INSTRUCTION = `You are a document verification assistant. You explain, in simple and professional language, common visual and structural signs that make identity documents (such as Aadhaar cards or PAN cards) look fake, based only on the document type and classification confidence provided. Never claim to have examined specific pixels or details you were not given. Stay strictly on-topic: document authenticity, security features, and verification tips. If asked something unrelated, politely redirect to the topic of document verification.`;
+const SYSTEM_INSTRUCTION = `You are a document verification assistant. You explain, in simple and professional language, common visual and structural signs that make identity documents (such as Aadhaar cards, PAN cards, or Passports) look fake, based only on the document type and classification confidence provided. Never claim to have examined specific pixels or details you were not given. Stay strictly on-topic: document authenticity, security features (e.g. laminate/photo page integrity, MRZ checksums, watermarks, font alignment), and verification tips. If asked something unrelated, politely redirect to the topic of document verification.`;
 
 // Conservative Generation Config for High Consistency
 const GENERATION_CONFIG = {
@@ -25,9 +25,9 @@ const CANNED_FALLBACK = `When a computer vision classification model flags an id
 
 Common red flags to check:
 • Font Misalignment & Typography: Inconsistent font styles, blurred text, or irregular character spacing.
-• Photo & Edge Tampering: Visible cut lines around the photo, inconsistent lighting, or background pattern disruption.
-• Layout & QR Code Discrepancies: Misaligned logos, altered field spacing, or invalid QR code data formatting.
-• Missing Security Features: Absent micro-printing, missing hologram reflections, or corrupted background patterns.`;
+• Photo & Edge Tampering: Visible cut lines around the photo, inconsistent lighting, or laminate layer disruption.
+• Layout & Format Discrepancies: Misaligned text fields, unreadable QR codes, or MRZ (Machine-Readable Zone) syntax errors.
+• Missing Security Features: Absent micro-printing, missing hologram reflections, or corrupted background watermarks.`;
 
 /**
  * Helper function to call Gemini API via REST with logging & multi-model fallback
@@ -108,9 +108,9 @@ function cleanAndValidateResponse(rawText, docType) {
 
     // Check relevance: Ensure response touches on document, fake, security, or verification concepts
     const lower = cleaned.toLowerCase();
-    const isRelevant = lower.includes('document') || lower.includes('card') || 
-                       lower.includes('fake') || lower.includes('verification') || 
-                       lower.includes('flag') || lower.includes('security') ||
+    const isRelevant = lower.includes('document') || lower.includes('card') || lower.includes('passport') ||
+                       lower.includes('fake') || lower.includes('verification') || lower.includes('mrz') ||
+                       lower.includes('flag') || lower.includes('security') || lower.includes('watermark') ||
                        lower.includes('photo') || lower.includes('font') || lower.includes('qr') || lower.includes('aadhaar') || lower.includes('pan');
 
     return isRelevant ? cleaned : null;
@@ -166,14 +166,24 @@ Explain in 3-5 bullet points the common visual and structural signs that could m
             });
         }
 
-        let rawResponse = await callGemini(contents);
+        let rawResponse = null;
+        try {
+            rawResponse = await callGemini(contents);
+        } catch (geminiError) {
+            console.warn("Gemini API call failed, falling back to canned response:", geminiError.message);
+        }
+
         let validatedExplanation = cleanAndValidateResponse(rawResponse, docType);
 
-        // RETRY LOGIC: If first response was off-topic or invalid, retry once
-        if (!validatedExplanation) {
+        // RETRY LOGIC: If first response was off-topic or invalid and rawResponse existed, retry once
+        if (!validatedExplanation && rawResponse) {
             console.warn("First API response failed validation/relevance check. Retrying once...");
-            rawResponse = await callGemini(contents);
-            validatedExplanation = cleanAndValidateResponse(rawResponse, docType);
+            try {
+                rawResponse = await callGemini(contents);
+                validatedExplanation = cleanAndValidateResponse(rawResponse, docType);
+            } catch (retryError) {
+                console.warn("Retry call failed:", retryError.message);
+            }
         }
 
         // Use cleaned response or canned fallback
@@ -185,11 +195,10 @@ Explain in 3-5 bullet points the common visual and structural signs that could m
         });
 
     } catch (error) {
-        console.error("Express /api/explain-fake Error:", error.message);
-        res.status(500).json({
-            success: false,
-            message: error.message || "Failed to process AI explanation request.",
-            fallback: CANNED_FALLBACK
+        console.error("Express /api/explain-fake Unexpected Error:", error.message);
+        res.json({
+            success: true,
+            explanation: CANNED_FALLBACK
         });
     }
 });
