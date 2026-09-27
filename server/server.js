@@ -9,19 +9,28 @@ const PORT = process.env.PORT || 5001;
 app.use(cors());
 app.use(express.json());
 
-// System Instruction for Gemini AI Security Specialist
-const SYSTEM_INSTRUCTION = `You are an expert AI Document Security Specialist assisting users with identity document verification.
-The user is reviewing an identity document (such as an Aadhaar Card or PAN Card) that was flagged as FAKE by a computer vision classification model.
+// Strict Persona & System Instruction
+const SYSTEM_INSTRUCTION = `You are a document verification assistant. You explain, in simple and professional language, common visual and structural signs that make identity documents (such as Aadhaar cards or PAN cards) look fake, based only on the document type and classification confidence provided. Never claim to have examined specific pixels or details you were not given. Stay strictly on-topic: document authenticity, security features, and verification tips. If asked something unrelated, politely redirect to the topic of document verification.`;
 
-Your task:
-1. Explain in plain, clear, professional language common reasons and visual red flags why this specific type of document gets flagged as fake.
-2. Mention general security indicators to inspect (e.g. font alignment errors, QR code formatting inconsistencies, photo edge tampering, pattern anomalies, or missing micro-text/hologram features).
-3. Frame your explanation generally as helpful security guidelines, noting that computer vision models inspect pixel-level features.
-4. Keep responses concise, well-structured (bullet points where appropriate), and easy to read.
-5. Provide helpful, context-aware answers to any follow-up questions the user asks.`;
+// Conservative Generation Config for High Consistency
+const GENERATION_CONFIG = {
+    temperature: 0.3,
+    topP: 0.8,
+    topK: 20,
+    maxOutputTokens: 800
+};
+
+// Generic Canned Fallback Response in case API fails or returns off-topic response twice
+const CANNED_FALLBACK = `When a computer vision classification model flags an identity document as fake with high confidence, it generally indicates visual or structural anomalies.
+
+Common red flags to check:
+• Font Misalignment & Typography: Inconsistent font styles, blurred text, or irregular character spacing.
+• Photo & Edge Tampering: Visible cut lines around the photo, inconsistent lighting, or background pattern disruption.
+• Layout & QR Code Discrepancies: Misaligned logos, altered field spacing, or invalid QR code data formatting.
+• Missing Security Features: Absent micro-printing, missing hologram reflections, or corrupted background patterns.`;
 
 /**
- * Helper function to call Gemini API via REST with multi-model fallback
+ * Helper function to call Gemini API via REST with logging & multi-model fallback
  */
 async function callGemini(contents) {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -29,16 +38,21 @@ async function callGemini(contents) {
         throw new Error("Gemini API key is not configured in server environment (.env).");
     }
 
-    // Prioritized model fallback list
     const models = [
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash",
+        "gemini-3.8-flash",
         "gemini-3.6-flash",
-        "gemini-2.5-pro",
+        "gemini-3.5-flash",
         "gemini-flash-latest"
     ];
 
     let lastError = null;
+
+    // LOGGING PROMPT & CONFIG (Server Console Debugging)
+    console.log("\n=================== [GEMINI REQUEST PROMPT] ===================");
+    console.log("SYSTEM INSTRUCTION:\n", SYSTEM_INSTRUCTION);
+    console.log("\nCONTENTS PAYLOAD:\n", JSON.stringify(contents, null, 2));
+    console.log("\nGENERATION CONFIG:\n", JSON.stringify(GENERATION_CONFIG, null, 2));
+    console.log("===============================================================\n");
 
     for (const modelName of models) {
         try {
@@ -51,18 +65,21 @@ async function callGemini(contents) {
                     systemInstruction: {
                         parts: [{ text: SYSTEM_INSTRUCTION }]
                     },
-                    generationConfig: {
-                        temperature: 0.7,
-                        maxOutputTokens: 800
-                    }
+                    generationConfig: GENERATION_CONFIG
                 })
             });
 
             const data = await response.json();
 
             if (response.ok && data.candidates && data.candidates.length > 0) {
-                const text = data.candidates[0].content.parts.map(p => p.text).join('\n');
-                return text;
+                const rawText = data.candidates[0].content.parts.map(p => p.text).join('\n');
+                
+                // LOGGING RAW RESPONSE
+                console.log(`\n=================== [GEMINI RESPONSE (${modelName})] ===================`);
+                console.log(rawText);
+                console.log("===============================================================\n");
+
+                return rawText;
             } else if (data.error) {
                 console.warn(`Model ${modelName} returned error: ${data.error.message}`);
                 lastError = new Error(data.error.message || `API Error from ${modelName}`);
@@ -77,6 +94,29 @@ async function callGemini(contents) {
 }
 
 /**
+ * Validates and cleans Gemini response text
+ */
+function cleanAndValidateResponse(rawText, docType) {
+    if (!rawText || typeof rawText !== 'string') return null;
+
+    let cleaned = rawText.trim();
+
+    // Strip code block wrappers if generated
+    cleaned = cleaned.replace(/^```html|^```markdown|^```/i, '').replace(/```$/i, '').trim();
+
+    if (cleaned.length < 30) return null;
+
+    // Check relevance: Ensure response touches on document, fake, security, or verification concepts
+    const lower = cleaned.toLowerCase();
+    const isRelevant = lower.includes('document') || lower.includes('card') || 
+                       lower.includes('fake') || lower.includes('verification') || 
+                       lower.includes('flag') || lower.includes('security') ||
+                       lower.includes('photo') || lower.includes('font') || lower.includes('qr') || lower.includes('aadhaar') || lower.includes('pan');
+
+    return isRelevant ? cleaned : null;
+}
+
+/**
  * POST /api/explain-fake
  * Payload: { docType, classificationResult, confidenceScore, chatHistory, userMessage }
  */
@@ -84,9 +124,26 @@ app.post('/api/explain-fake', async (req, res) => {
     try {
         const { docType = 'Identity Document', confidenceScore = '90%', chatHistory = [], userMessage } = req.body;
 
+        // Structured initial prompt format
+        const structuredInitialPrompt = `Document type: ${docType}
+Classification result: FAKE
+Confidence: ${confidenceScore}
+
+Explain in 3-5 bullet points the common visual and structural signs that could make this type of document be flagged as fake. Keep it factual, non-alarming, concise, and general (do not claim to have examined specific pixels or unprovided details of this specific image).`;
+
         const contents = [];
 
-        // Build Gemini conversation payload from chatHistory if present
+        // Always include initial document context header for chat continuity
+        contents.push({
+            role: 'user',
+            parts: [{ text: `Context:\nDocument type: ${docType}\nClassification result: FAKE\nConfidence: ${confidenceScore}\n\nPlease maintain focus strictly on document verification for ${docType}.` }]
+        });
+        contents.push({
+            role: 'model',
+            parts: [{ text: `Understood. I will provide focused, simple, and professional verification guidance for ${docType}.` }]
+        });
+
+        // Append conversation history
         if (Array.isArray(chatHistory) && chatHistory.length > 0) {
             chatHistory.forEach(msg => {
                 contents.push({
@@ -96,32 +153,43 @@ app.post('/api/explain-fake', async (req, res) => {
             });
         }
 
-        // Add current user prompt
+        // Append current prompt (follow-up question OR initial structured prompt)
         if (userMessage) {
             contents.push({
                 role: 'user',
                 parts: [{ text: userMessage }]
             });
         } else {
-            // Initial Explanation Request
-            const initialPrompt = `My uploaded ${docType} was classified as FAKE with ${confidenceScore} confidence by the classification model. Please explain why this document is likely fake, listing key visual red flags and verification guidelines to check on a ${docType}.`;
             contents.push({
                 role: 'user',
-                parts: [{ text: initialPrompt }]
+                parts: [{ text: structuredInitialPrompt }]
             });
         }
 
-        const explanation = await callGemini(contents);
+        let rawResponse = await callGemini(contents);
+        let validatedExplanation = cleanAndValidateResponse(rawResponse, docType);
+
+        // RETRY LOGIC: If first response was off-topic or invalid, retry once
+        if (!validatedExplanation) {
+            console.warn("First API response failed validation/relevance check. Retrying once...");
+            rawResponse = await callGemini(contents);
+            validatedExplanation = cleanAndValidateResponse(rawResponse, docType);
+        }
+
+        // Use cleaned response or canned fallback
+        const finalExplanation = validatedExplanation || CANNED_FALLBACK;
 
         res.json({
             success: true,
-            explanation: explanation
+            explanation: finalExplanation
         });
+
     } catch (error) {
         console.error("Express /api/explain-fake Error:", error.message);
         res.status(500).json({
             success: false,
-            message: error.message || "Failed to process AI explanation request."
+            message: error.message || "Failed to process AI explanation request.",
+            fallback: CANNED_FALLBACK
         });
     }
 });
