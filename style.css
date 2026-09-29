@@ -1164,3 +1164,113 @@ body {
     font-size: 0.85rem;
     border-top: 1px solid var(--border-color);
 }
+
+/* ==========================================================================
+   Document Type Mismatch Warning Banner Styles
+   ========================================================================== */
+.doc-mismatch-banner {
+    margin: 1rem 0;
+    padding: 0.9rem 1.1rem;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: var(--radius-md);
+    color: #fef3c7;
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+.mismatch-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.mismatch-content.info-mode {
+    background: rgba(59, 130, 246, 0.1);
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #dbeafe;
+}
+
+.mismatch-text {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    flex: 1;
+}
+
+.mismatch-icon {
+    font-size: 1.35rem;
+    color: #f59e0b;
+    flex-shrink: 0;
+}
+
+.mismatch-reason {
+    color: #fde68a;
+    font-style: italic;
+}
+
+.mismatch-switch-btn {
+    background: #f59e0b;
+    color: #000000;
+    font-weight: 700;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    white-space: nowrap;
+}
+
+.mismatch-switch-btn:hover {
+    background: #d97706;
+    transform: translateY(-1px);
+}
+
+/* Verdict Warning Card (Mismatch Gate) */
+.verdict-card.verdict-warning-mismatch {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    box-shadow: 0 4px 20px rgba(245, 158, 11, 0.15);
+}
+
+.verdict-card.verdict-warning-mismatch .verdict-icon-wrap {
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+}
+
+.verdict-card.verdict-warning-unreadable {
+    background: rgba(148, 163, 184, 0.08);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.verdict-card.verdict-warning-unreadable .verdict-icon-wrap {
+    background: rgba(148, 163, 184, 0.2);
+    color: #94a3b8;
+}
+
+.mismatch-action-container {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(245, 158, 11, 0.2);
+    flex-wrap: wrap;
+    width: 100%;
+}
+
+.mismatch-evidence {
+    font-size: 0.825rem;
+    color: #fde68a;
+    font-style: italic;
+}
+
+.privacy-notice {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-top: 0.5rem;
+}
+
+

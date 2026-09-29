@@ -1,5 +1,5 @@
 /**
- * AI Security Chatbot Assistant (Powered by Google Gemini via Backend Proxy)
+ * Multimodal AI Security Chatbot Assistant (Powered by Google Gemini via Backend Proxy)
  * Activated ONLY when a document is classified as "FAKE"
  */
 
@@ -19,6 +19,18 @@ const chatSendBtn = document.getElementById("chat-send-btn");
 const explainTriggerBtn = document.getElementById("explain-trigger-btn");
 
 /**
+ * Mask sensitive ID numbers in client UI
+ */
+function maskSensitiveIdNumbers(text) {
+    if (!text || typeof text !== 'string') return text;
+    // Mask 12-digit Aadhaar numbers: 1234 5678 9012 -> XXXX-XXXX-9012
+    let masked = text.replace(/\b\d{4}\s?\d{4}\s?(\d{4})\b/g, 'XXXX-XXXX-$1');
+    // Mask 10-char PAN numbers: ABCDE1234F -> XXXXX1234F
+    masked = masked.replace(/\b[A-Z]{5}(\d{4}[A-Z])\b/g, 'XXXXX$1');
+    return masked;
+}
+
+/**
  * Called by script.js when a classification result is produced.
  * Shows panel if FAKE, hides if ORIGINAL.
  */
@@ -35,11 +47,13 @@ function handleChatbotVisibility(verdictClass, docTypeLabel, confidencePercent) 
 function showChatbotPanel() {
     if (!chatbotPanel) return;
     
-    // Reset state
     chatHistory = [];
     chatMessagesContainer.innerHTML = `
         <div class="chat-bubble bot-bubble hint-bubble" id="chat-hint">
-            <i class="fa-solid fa-circle-info"></i> Click <strong>"Why was this flagged as fake?"</strong> above to generate an AI explanation of potential red flags.
+            <i class="fa-solid fa-circle-info"></i> Click <strong>"Why was this flagged as fake?"</strong> above to generate an AI visual inspection report grounded in your uploaded document image.
+            <div style="font-size: 0.78rem; color: #94a3b8; margin-top: 6px;">
+                <i class="fa-solid fa-user-shield"></i> <em>Privacy notice: Your document image is processed in-memory by Google's Gemini Vision API for analysis.</em>
+            </div>
         </div>
     `;
     
@@ -60,23 +74,24 @@ function hideChatbotPanel() {
 }
 
 /**
- * Trigger initial AI explanation call
+ * Trigger initial AI multimodal explanation call
  */
 async function requestFakeExplanation() {
     if (isWaitingForAI) return;
     
-    // Hide hint
     const hintEl = document.getElementById("chat-hint");
     if (hintEl) hintEl.remove();
 
     if (explainTriggerBtn) {
         explainTriggerBtn.disabled = true;
-        explainTriggerBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Analyzing Red Flags...`;
+        explainTriggerBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Inspecting Image Features...`;
     }
 
-    // Append loading bubble
     const loadingId = appendLoadingBubble();
     isWaitingForAI = true;
+
+    // Get current resized image payload
+    const imgData = typeof getCurrentImageData === "function" ? getCurrentImageData() : null;
 
     try {
         const response = await fetch(BACKEND_API_URL, {
@@ -85,6 +100,7 @@ async function requestFakeExplanation() {
             body: JSON.stringify({
                 docType: activeDocType,
                 confidenceScore: activeConfidenceScore,
+                image: imgData,
                 chatHistory: []
             })
         });
@@ -96,14 +112,13 @@ async function requestFakeExplanation() {
             const aiText = data.explanation;
             appendMessage("bot", aiText);
             
-            // Add to history
             chatHistory.push({ sender: "bot", text: aiText });
 
             if (explainTriggerBtn) {
-                explainTriggerBtn.innerHTML = `<i class="fa-solid fa-circle-check"></i> Explanation Generated`;
+                explainTriggerBtn.innerHTML = `<i class="fa-solid fa-circle-check"></i> Image Inspection Complete`;
             }
         } else {
-            const errMsg = data.message || "Unable to retrieve explanation from Gemini API.";
+            const errMsg = data.message || "Unable to retrieve explanation from Gemini Vision API.";
             appendErrorMessage(errMsg);
             if (explainTriggerBtn) explainTriggerBtn.disabled = false;
         }
@@ -111,8 +126,7 @@ async function requestFakeExplanation() {
         console.error("Chatbot Fetch Error:", err);
         removeLoadingBubble(loadingId);
         appendErrorMessage(
-            `Unable to connect to the backend server at <code>${BACKEND_API_URL}</code>. ` +
-            `Please ensure the server is running by opening terminal and running: <code>cd server && npm start</code>`
+            `Unable to connect to backend server at <code>${BACKEND_API_URL}</code>. Ensure server is running: <code>cd server && npm start</code>`
         );
         if (explainTriggerBtn) explainTriggerBtn.disabled = false;
     } finally {
@@ -129,24 +143,24 @@ async function sendUserChatMessage() {
     const messageText = chatUserInput.value.trim();
     if (!messageText) return;
 
-    // Clear input
     chatUserInput.value = "";
 
-    // Append user message bubble
     appendMessage("user", messageText);
     chatHistory.push({ sender: "user", text: messageText });
 
-    // Append loading bubble for AI
     const loadingId = appendLoadingBubble();
     isWaitingForAI = true;
 
+    const imgData = typeof getCurrentImageData === "function" ? getCurrentImageData() : null;
+
     try {
-        const response = await fetch(BACKEND_API_URL, {
+        const response = await fetch("http://localhost:5001/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 docType: activeDocType,
                 confidenceScore: activeConfidenceScore,
+                image: imgData,
                 chatHistory: chatHistory,
                 userMessage: messageText
             })
@@ -192,7 +206,7 @@ function appendMessage(sender, text) {
 
     const content = document.createElement("div");
     content.className = "chat-text";
-    content.innerHTML = formatMarkdownResponse(text);
+    content.innerHTML = formatMarkdownResponse(maskSensitiveIdNumbers(text));
 
     bubbleWrapper.appendChild(avatar);
     bubbleWrapper.appendChild(content);
@@ -246,25 +260,34 @@ function scrollToBottom() {
 }
 
 /**
- * Simple Markdown formatting helper for AI text responses
+ * Markdown formatting helper for AI text responses
  */
 function formatMarkdownResponse(text) {
     if (!text) return "";
-
-    let formatted = text
+    let html = text
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
 
-    // Bold **text**
-    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // Bold headings & subheadings
+    html = html.replace(/^### (.*$)/gim, '<strong>$1</strong>');
+    html = html.replace(/^## (.*$)/gim, '<strong>$1</strong>');
     
-    // Bullet points * item or - item
-    formatted = formatted.replace(/^[\*\-] (.*$)/gim, '<li>$1</li>');
-    formatted = formatted.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+    // Bold
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
 
-    // Newlines to <br> if not inside ul
-    formatted = formatted.replace(/\n/g, '<br>');
+    // Italic
+    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
 
-    return formatted;
+    // Bullet lists
+    html = html.replace(/^\s*[\-\*•]\s+(.*$)/gim, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>)/gim, '<ul>$1</ul>');
+    html = html.replace(/<\/ul>\s*<ul>/g, '');
+
+    // Paragraph linebreaks
+    html = html.replace(/\n\n/g, '<br><br>');
+    html = html.replace(/\n/g, '<br>');
+
+    return html;
 }
