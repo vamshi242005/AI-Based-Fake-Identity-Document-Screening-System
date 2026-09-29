@@ -7,3 +7,5 @@ Thumbs.db
 # Dependency directories if added later
 node_modules/
 dist/
+.env
+
