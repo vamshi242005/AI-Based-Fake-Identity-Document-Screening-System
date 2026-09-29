@@ -1,6 +1,6 @@
 /**
- * Multi-Document Teachable Machine Classification Script
- * Supported Documents: Aadhaar Card, PAN Card, Passport & Voter ID
+ * AI-Based Fake Identity Document Screening System
+ * Client-Side Application Logic & API Communication
  */
 
 // SESSION GUARD: Protect route if user is not authenticated
@@ -10,66 +10,56 @@
     }
 })();
 
-// Data-Driven Document Registry Configuration
-const DOC_TYPES = {
+// Document Configuration Registry
+const DOC_CONFIGS = {
     aadhaar: {
         id: "aadhaar",
         label: "Aadhaar Card",
         icon: "fa-address-card",
-        modelPath: "./model-aadhaar/",
-        resultTitle: "Aadhaar Card Check Result"
+        title: "Aadhaar Card Verification"
     },
     pan: {
         id: "pan",
         label: "PAN Card",
         icon: "fa-id-card",
-        modelPath: "./model-pancard/",
-        resultTitle: "PAN Card Check Result"
+        title: "PAN Card Verification"
     },
     pancard: {
-        id: "pancard",
+        id: "pan",
         label: "PAN Card",
         icon: "fa-id-card",
-        modelPath: "./model-pancard/",
-        resultTitle: "PAN Card Check Result"
+        title: "PAN Card Verification"
     },
     passport: {
         id: "passport",
         label: "Passport",
         icon: "fa-passport",
-        modelPath: "./model-passport/",
-        resultTitle: "Passport Check Result"
+        title: "Passport Verification"
     },
-    voterid: {
-        id: "voterid",
+    voter_id: {
+        id: "voter_id",
         label: "Voter ID Card",
         icon: "fa-check-to-slot",
-        modelPath: "./model-voterid/",
-        resultTitle: "Voter ID Check Result"
+        title: "Voter ID Verification"
+    },
+    voterid: {
+        id: "voter_id",
+        label: "Voter ID Card",
+        icon: "fa-check-to-slot",
+        title: "Voter ID Verification"
     }
 };
 
 // Application State
 let currentDocType = "aadhaar";
-const loadedModels = {}; // Cache map for all loaded models
 let webcamStream = null;
-let isLivePredicting = false;
-let livePredictAnimationFrame = null;
+let activeBase64Image = null;
 
-// Multimodal & Identification Gate State
-let currentImageData = null; // { base64, mimeType }
-let isMismatchActive = false;
-let isMismatchOverridden = false;
-let detectedDocInfo = null;
-
-// DOM Elements
-const modelStatusPill = document.getElementById("model-status");
-const modelStatusText = document.getElementById("model-status-text");
-
-const docResultBanner = document.getElementById("doc-result-banner");
-const docResultIcon = document.getElementById("doc-result-icon");
-const docResultTitle = document.getElementById("doc-result-title");
-const activeModelFolder = document.getElementById("active-model-folder");
+// DOM Element References
+const docMismatchBanner = document.getElementById("doc-mismatch-banner");
+const mismatchBannerText = document.getElementById("mismatch-banner-text");
+const uploadInlineError = document.getElementById("upload-inline-error");
+const uploadInlineErrorText = document.getElementById("upload-inline-error-text");
 
 const dropZone = document.getElementById("drop-zone");
 const fileInput = document.getElementById("file-input");
@@ -79,27 +69,35 @@ const webcamOverlay = document.getElementById("webcam-overlay");
 const startWebcamBtn = document.getElementById("start-webcam-btn");
 const stopWebcamBtn = document.getElementById("stop-webcam-btn");
 const captureWebcamBtn = document.getElementById("capture-webcam-btn");
-const livePredictBtn = document.getElementById("live-predict-btn");
-const livePredictText = document.getElementById("live-predict-text");
 
 const previewCard = document.getElementById("preview-card");
 const previewImage = document.getElementById("preview-image");
 const imageInfoName = document.getElementById("image-info-name");
-const classifyBtn = document.getElementById("classify-btn");
+
+const docResultIcon = document.getElementById("doc-result-icon");
+const docResultTitle = document.getElementById("doc-result-title");
 
 const resultsEmpty = document.getElementById("results-empty");
 const resultsLoading = document.getElementById("results-loading");
+const resultsLoadingText = document.getElementById("results-loading-text");
 const resultsContent = document.getElementById("results-content");
+
 const errorBanner = document.getElementById("error-banner");
 const errorMessage = document.getElementById("error-message");
-const inferenceTimeBadge = document.getElementById("inference-time-badge");
 
 const verdictCard = document.getElementById("verdict-card");
 const verdictIcon = document.getElementById("verdict-icon");
-const verdictTitle = document.getElementById("verdict-title");
+const verdictStatusBadge = document.getElementById("verdict-status-badge");
 const verdictDesc = document.getElementById("verdict-desc");
 const verdictTopScore = document.getElementById("verdict-top-score");
 
+const summaryText = document.getElementById("summary-text");
+const fieldName = document.getElementById("field-name");
+const fieldIdNumber = document.getElementById("field-id-number");
+const fieldDob = document.getElementById("field-dob");
+
+const whyFlaggedSection = document.getElementById("why-flagged-section");
+const reasonsList = document.getElementById("reasons-list");
 const userDisplayName = document.getElementById("user-display-name");
 
 // Initialization
@@ -109,36 +107,11 @@ document.addEventListener("DOMContentLoaded", () => {
         userDisplayName.textContent = currentUser;
     }
 
-    renderDocTypeTabs();
-    preloadAllModels();
     setupDropZone();
     setupFileInput();
 });
 
-/**
- * Dynamically renders document selector tabs
- */
-function renderDocTypeTabs() {
-    const container = document.getElementById("doc-tabs-container");
-    if (!container) return;
-
-    // Filter unique doc types for UI buttons (aadhaar, pan, passport, voterid)
-    const uniqueKeys = ["aadhaar", "pan", "passport", "voterid"];
-
-    container.innerHTML = uniqueKeys.map(key => {
-        const doc = DOC_TYPES[key];
-        const isActive = (key === currentDocType || (key === "pan" && currentDocType === "pancard"));
-        return `
-            <button class="doc-btn ${isActive ? 'active' : ''}" 
-                    id="doc-${key}-btn" 
-                    onclick="selectDocumentType('${key}')">
-                <i class="fa-solid ${doc.icon}"></i> ${doc.label}
-            </button>
-        `;
-    }).join('');
-}
-
-// Logout Session Function
+// Logout Helper
 function logout() {
     sessionStorage.removeItem("isLoggedIn");
     sessionStorage.removeItem("currentUser");
@@ -146,317 +119,64 @@ function logout() {
     window.location.href = "login.html";
 }
 
-/* ==========================================================================
-   1. Sensitive PII Masking Helper
-   ========================================================================== */
-function maskSensitiveIdNumbers(text) {
-    if (!text || typeof text !== 'string') return text;
-    // Mask 12-digit Aadhaar numbers: 1234 5678 9012 -> XXXX-XXXX-9012
-    let masked = text.replace(/\b\d{4}\s?\d{4}\s?(\d{4})\b/g, 'XXXX-XXXX-$1');
-    // Mask 10-char PAN numbers: ABCDE1234F -> XXXXX1234F
-    masked = masked.replace(/\b[A-Z]{5}(\d{4}[A-Z])\b/g, 'XXXXX$1');
-    return masked;
-}
+/**
+ * Select Expected Document Type
+ */
+function selectDocumentType(docTypeId) {
+    let normId = docTypeId;
+    if (normId === "pancard") normId = "pan";
+    if (normId === "voterid") normId = "voter_id";
 
-/* ==========================================================================
-   2. Client-Side Image Resizing (Max 1280px on longest side)
-   ========================================================================== */
-function getResizedBase64(imgElement, maxDimension = 1280) {
-    if (!imgElement || !imgElement.src) return null;
+    currentDocType = normId;
 
-    try {
-        const canvas = document.createElement("canvas");
-        let width = imgElement.naturalWidth || imgElement.width || 640;
-        let height = imgElement.naturalHeight || imgElement.height || 480;
+    // Update active tab buttons
+    document.querySelectorAll(".doc-btn").forEach(btn => btn.classList.remove("active"));
+    const activeBtn = document.getElementById(`doc-${normId}-btn`);
+    if (activeBtn) activeBtn.classList.add("active");
 
-        if (width > maxDimension || height > maxDimension) {
-            if (width > height) {
-                height = Math.round((height * maxDimension) / width);
-                width = maxDimension;
-            } else {
-                width = Math.round((width * maxDimension) / height);
-                height = maxDimension;
-            }
-        }
+    // Update Result Banner Info
+    const config = DOC_CONFIGS[normId] || DOC_CONFIGS.aadhaar;
+    if (docResultIcon) docResultIcon.className = `fa-solid ${config.icon}`;
+    if (docResultTitle) docResultTitle.textContent = config.title;
 
-        canvas.width = width;
-        canvas.height = height;
+    clearMismatchAlerts();
+    clearError();
 
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(imgElement, 0, 0, width, height);
-
-        const mimeType = "image/jpeg";
-        const dataUrl = canvas.toDataURL(mimeType, 0.85);
-
-        return {
-            base64: dataUrl,
-            mimeType: mimeType
-        };
-    } catch (e) {
-        console.warn("Canvas resize exception:", e.message);
-        return {
-            base64: imgElement.src,
-            mimeType: "image/jpeg"
-        };
-    }
-}
-
-function getCurrentImageData() {
-    if (!currentImageData && previewImage && previewImage.src && previewCard.style.display !== 'none') {
-        currentImageData = getResizedBase64(previewImage, 1280);
-    }
-    return currentImageData;
-}
-
-/* ==========================================================================
-   3. Step 2 Mismatch Gate BEFORE Classifier Result is Shown
-   ========================================================================== */
-async function handleImageIngestion() {
-    if (!previewImage.src || previewCard.style.display === 'none') return;
-
-    currentImageData = getResizedBase64(previewImage, 1280);
-    isMismatchOverridden = false;
-    isMismatchActive = false;
-
-    // Show loading state in results section while identifying document type
-    showLoading(true, "Verifying document type with Gemini Vision...");
-
-    try {
-        const response = await fetch("http://localhost:5001/api/identify-doc", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                image: currentImageData,
-                selectedType: currentDocType
-            })
-        });
-
-        const data = await response.json();
-        showLoading(false);
-
-        if (data && data.success) {
-            detectedDocInfo = data;
-            let detected = (data.detectedType || "other").toLowerCase().trim();
-            if (detected === "pancard" || detected === "pan_card" || detected === "pan card") detected = "pan";
-
-            let selectedNorm = (currentDocType === "pancard") ? "pan" : currentDocType;
-            const isSupported = DOC_TYPES[detected] !== undefined;
-
-            const evidenceText = (data.visibleEvidence && data.visibleEvidence.length > 0)
-                ? data.visibleEvidence.join(", ")
-                : "visual layout indicators";
-
-            if (isSupported && detected !== selectedNorm && data.confidence !== "low") {
-                // MISMATCH GATE TRIGGERED!
-                isMismatchActive = true;
-                const detectedLabel = DOC_TYPES[detected].label;
-                const selectedLabel = DOC_TYPES[selectedNorm] ? DOC_TYPES[selectedNorm].label : selectedNorm.toUpperCase();
-
-                renderMismatchWarningCard(selectedLabel, detectedLabel, detected, evidenceText);
-                return;
-            } else if (!isSupported || detected === "other" || detected === "unreadable") {
-                // UNREADABLE / NON-DOCUMENT PHOTO GATE TRIGGERED!
-                isMismatchActive = true;
-                renderUnreadableWarningCard();
-                return;
-            } else {
-                // Match confirmed -> Proceed to classify with TM model
-                isMismatchActive = false;
-                classifyActiveImage();
-            }
-        } else {
-            // Fallback if API fails -> proceed to classification
-            classifyActiveImage();
-        }
-    } catch (err) {
-        console.warn("Identification request failed, proceeding to direct classification:", err.message);
-        showLoading(false);
+    // Re-verify active preview image if present
+    if (activeBase64Image && previewCard.style.display !== 'none') {
         classifyActiveImage();
     }
 }
 
 /**
- * Render Mismatch Warning Card in Results Panel
+ * Tab Switching (Upload vs Webcam)
  */
-function renderMismatchWarningCard(selectedLabel, detectedLabel, detectedKey, evidenceText) {
-    resultsEmpty.style.display = 'none';
-    resultsLoading.style.display = 'none';
-    resultsContent.style.display = 'block';
-
-    if (typeof hideChatbotPanel === "function") {
-        hideChatbotPanel();
-    }
-
-    verdictCard.className = "verdict-card verdict-warning-mismatch";
-    verdictIcon.className = "fa-solid fa-triangle-exclamation";
-    verdictTitle.textContent = "Wrong Document Type Detected";
-    verdictDesc.innerHTML = `
-        You selected <strong>${selectedLabel}</strong>, but this image looks like an <strong>${detectedLabel}</strong> 
-        <br><span class="mismatch-evidence">(Seen: ${evidenceText})</span>.
-        <br><small style="color: #fde68a;">Classification results for the wrong document type are invalid.</small>
-    `;
-
-    verdictTopScore.textContent = "MISMATCH";
-
-    // Insert action buttons
-    let actionBox = document.getElementById("mismatch-action-box");
-    if (!actionBox) {
-        actionBox = document.createElement("div");
-        actionBox.id = "mismatch-action-box";
-        actionBox.className = "mismatch-action-container";
-        verdictCard.appendChild(actionBox);
-    }
-
-    actionBox.style.display = "flex";
-    actionBox.innerHTML = `
-        <button class="btn btn-warning btn-md" onclick="switchSelectorAndRecheck('${detectedKey}')">
-            <i class="fa-solid fa-arrow-rotate-right"></i> Switch to ${detectedLabel} & Re-check
-        </button>
-        <button class="btn btn-outline btn-md" onclick="overrideMismatchAndClassify()">
-            <i class="fa-solid fa-circle-question"></i> Keep ${selectedLabel} Anyway
-        </button>
-    `;
-}
-
-/**
- * Render Unreadable / Non-Document Photo Card
- */
-function renderUnreadableWarningCard() {
-    resultsEmpty.style.display = 'none';
-    resultsLoading.style.display = 'none';
-    resultsContent.style.display = 'block';
-
-    if (typeof hideChatbotPanel === "function") {
-        hideChatbotPanel();
-    }
-
-    verdictCard.className = "verdict-card verdict-warning-unreadable";
-    verdictIcon.className = "fa-solid fa-camera-rotate";
-    verdictTitle.textContent = "Unclear or Unsupported Photo";
-    verdictDesc.innerHTML = `This doesn't look like a supported ID document or the image is too unclear. Please upload a clear, well-lit, full-frame photo.`;
-    verdictTopScore.textContent = "N/A";
-
-    const actionBox = document.getElementById("mismatch-action-box");
-    if (actionBox) actionBox.style.display = "none";
-}
-
-function switchSelectorAndRecheck(targetDocTypeId) {
-    const actionBox = document.getElementById("mismatch-action-box");
-    if (actionBox) actionBox.style.display = "none";
-
-    isMismatchActive = false;
-    isMismatchOverridden = false;
-
-    selectDocumentType(targetDocTypeId);
-}
-
-function overrideMismatchAndClassify() {
-    const actionBox = document.getElementById("mismatch-action-box");
-    if (actionBox) actionBox.style.display = "none";
-
-    isMismatchActive = false;
-    isMismatchOverridden = true;
-
-    classifyActiveImage();
-}
-
-/* ==========================================================================
-   4. Model Loader & Cache Manager
-   ========================================================================== */
-async function loadModelForDocType(docTypeId) {
-    let normTypeId = (docTypeId === "pan") ? "pancard" : docTypeId;
-    if (loadedModels[normTypeId]) {
-        return loadedModels[normTypeId];
-    }
-    const docConfig = DOC_TYPES[normTypeId];
-    if (!docConfig) throw new Error(`Unknown document type: ${docTypeId}`);
-
-    const modelURL = docConfig.modelPath + "model.json";
-    const metadataURL = docConfig.modelPath + "metadata.json";
-
-    const model = await tmImage.load(modelURL, metadataURL);
-    loadedModels[normTypeId] = model;
-    return model;
-}
-
-async function preloadAllModels() {
-    updateModelStatus("loading", "Loading Models...");
-    try {
-        if (typeof tmImage === "undefined") {
-            throw new Error("Teachable Machine library not loaded. Check CDN script tags.");
-        }
-
-        // Preload models for unique document keys
-        const keys = ["aadhaar", "pancard", "passport", "voterid"];
-        await Promise.all(keys.map(id => loadModelForDocType(id)));
-
-        updateModelStatus("ready", `Models Loaded (4 Document Types Ready)`);
-    } catch (err) {
-        console.error("Error preloading models:", err);
-        updateModelStatus("error", "Model Load Failed");
-        showError(
-            `Failed to load document models. Please run a local web server (e.g. <code>python -m http.server 5000</code>).`
-        );
-    }
-}
-
-function updateModelStatus(state, text) {
-    if (modelStatusPill) modelStatusPill.className = `model-status-badge status-${state}`;
-    if (modelStatusText) modelStatusText.textContent = text;
-}
-
-/* ==========================================================================
-   5. Document Type Selection & Auto Re-classification
-   ========================================================================== */
-function selectDocumentType(docTypeId) {
-    let normId = (docTypeId === "pan") ? "pancard" : docTypeId;
-    if (!DOC_TYPES[normId]) return;
-    currentDocType = normId;
-
-    // Update tab highlight
-    document.querySelectorAll(".doc-btn").forEach(btn => btn.classList.remove("active"));
-    const activeBtn = document.getElementById(`doc-${docTypeId === 'pancard' ? 'pan' : docTypeId}-btn`) || document.getElementById(`doc-${normId}-btn`);
-    if (activeBtn) activeBtn.classList.add("active");
-
-    // Update Result Banner & Folder Metadata
-    const docConfig = DOC_TYPES[normId];
-    docResultIcon.className = `fa-solid ${docConfig.icon}`;
-    docResultTitle.textContent = docConfig.resultTitle;
-    if (activeModelFolder) activeModelFolder.textContent = docConfig.modelPath;
-
-    // Auto re-ingest active preview image if present
-    if (previewImage.src && previewCard.style.display !== 'none') {
-        handleImageIngestion();
-    }
-}
-
-/* ==========================================================================
-   6. Tab Switching Logic (Upload vs Webcam)
-   ========================================================================== */
 function switchTab(tabName) {
     document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("active"));
-    document.getElementById(`tab-${tabName}-btn`).classList.add("active");
+    const tabBtn = document.getElementById(`tab-${tabName}-btn`);
+    if (tabBtn) tabBtn.classList.add("active");
 
     document.querySelectorAll(".tab-content").forEach(content => content.classList.remove("active"));
-    document.getElementById(`${tabName}-tab`).classList.add("active");
+    const contentBox = document.getElementById(`${tabName}-tab`);
+    if (contentBox) contentBox.classList.add("active");
 
     if (tabName !== "webcam" && webcamStream) {
         stopWebcam();
     }
 }
 
-/* ==========================================================================
-   7. File Upload & Drag-and-Drop
-   ========================================================================== */
+/**
+ * File Upload & Drag-and-Drop Handlers
+ */
 function setupDropZone() {
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, preventDefaults, false);
-    });
+    if (!dropZone) return;
 
-    function preventDefaults(e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        }, false);
+    });
 
     ['dragenter', 'dragover'].forEach(eventName => {
         dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
@@ -468,20 +188,14 @@ function setupDropZone() {
 
     dropZone.addEventListener('drop', (e) => {
         const dt = e.dataTransfer;
-        const files = dt.files;
-        if (files && files.length > 0) {
-            handleSelectedFile(files[0]);
-        }
-    });
-
-    dropZone.addEventListener('click', (e) => {
-        if (e.target !== fileInput && !e.target.classList.contains('btn')) {
-            fileInput.click();
+        if (dt && dt.files && dt.files.length > 0) {
+            handleSelectedFile(dt.files[0]);
         }
     });
 }
 
 function setupFileInput() {
+    if (!fileInput) return;
     fileInput.addEventListener('change', (e) => {
         if (e.target.files && e.target.files.length > 0) {
             handleSelectedFile(e.target.files[0]);
@@ -489,55 +203,56 @@ function setupFileInput() {
     });
 }
 
+/**
+ * Client-Side File Validation & Handling
+ */
 function handleSelectedFile(file) {
+    clearMismatchAlerts();
     clearError();
-    if (!file.type.startsWith('image/')) {
-        showError("Invalid file type. Please select a valid image file (JPG, PNG, WEBP).");
+
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
+    if (!allowedTypes.includes(file.type.toLowerCase())) {
+        showMismatchAlert(`Invalid file format '${file.type || 'unknown'}'. Please upload a JPG, PNG, WEBP, or PDF document.`);
+        clearSelectedImage();
+        return;
+    }
+
+    const sizeInMB = file.size / (1024 * 1024);
+    if (sizeInMB > 10.0) {
+        showMismatchAlert(`File size (${sizeInMB.toFixed(2)} MB) exceeds maximum limit of 10 MB. Please upload a smaller file.`);
+        clearSelectedImage();
         return;
     }
 
     const reader = new FileReader();
     reader.onload = (e) => {
+        activeBase64Image = e.target.result;
         previewImage.src = e.target.result;
-        imageInfoName.textContent = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+        imageInfoName.textContent = `${file.name} (${sizeInMB < 1 ? (file.size / 1024).toFixed(1) + ' KB' : sizeInMB.toFixed(2) + ' MB'})`;
         previewCard.style.display = 'block';
 
-        previewImage.onload = () => {
-            handleImageIngestion();
-        };
+        // Auto verify on upload
+        classifyActiveImage();
     };
     reader.readAsDataURL(file);
 }
 
 function clearSelectedImage() {
+    activeBase64Image = null;
     previewImage.src = '';
-    currentImageData = null;
-    isMismatchActive = false;
-    isMismatchOverridden = false;
-    detectedDocInfo = null;
-
-    const actionBox = document.getElementById("mismatch-action-box");
-    if (actionBox) actionBox.style.display = "none";
-
+    if (fileInput) fileInput.value = '';
     previewCard.style.display = 'none';
-    fileInput.value = '';
     resetResultsUI();
 }
 
-/* ==========================================================================
-   8. Webcam Controls
-   ========================================================================== */
+/**
+ * Webcam Controls
+ */
 async function startWebcam() {
     clearError();
+    clearMismatchAlerts();
     try {
-        const constraints = {
-            video: {
-                width: { ideal: 640 },
-                height: { ideal: 480 },
-                facingMode: "user"
-            }
-        };
-
+        const constraints = { video: { width: { ideal: 640 }, height: { ideal: 480 } } };
         webcamStream = await navigator.mediaDevices.getUserMedia(constraints);
         webcamVideo.srcObject = webcamStream;
         webcamOverlay.style.display = 'none';
@@ -545,238 +260,232 @@ async function startWebcam() {
         startWebcamBtn.disabled = true;
         stopWebcamBtn.disabled = false;
         captureWebcamBtn.disabled = false;
-        livePredictBtn.disabled = false;
-
     } catch (err) {
-        console.error("Webcam access error:", err);
-        showError("Unable to access camera. Please allow camera permissions in your browser settings.");
+        showError("Camera access denied or unreadable. Please check browser camera permissions.");
     }
 }
 
 function stopWebcam() {
-    if (isLivePredicting) {
-        toggleLivePredict();
-    }
-
     if (webcamStream) {
         webcamStream.getTracks().forEach(track => track.stop());
         webcamStream = null;
     }
-
     webcamVideo.srcObject = null;
     webcamOverlay.style.display = 'flex';
 
     startWebcamBtn.disabled = false;
     stopWebcamBtn.disabled = true;
     captureWebcamBtn.disabled = true;
-    livePredictBtn.disabled = true;
 }
 
 function captureWebcamImage() {
     if (!webcamStream) return;
+    const canvas = document.getElementById("hidden-canvas");
+    const ctx = canvas.getContext("2d");
 
-    const hiddenCanvas = document.getElementById("hidden-canvas");
-    const ctx = hiddenCanvas.getContext("2d");
-    
-    hiddenCanvas.width = webcamVideo.videoWidth || 640;
-    hiddenCanvas.height = webcamVideo.videoHeight || 480;
+    canvas.width = webcamVideo.videoWidth || 640;
+    canvas.height = webcamVideo.videoHeight || 480;
+    ctx.drawImage(webcamVideo, 0, 0, canvas.width, canvas.height);
 
-    ctx.drawImage(webcamVideo, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-    
-    const dataUrl = hiddenCanvas.toDataURL("image/jpeg");
+    const dataUrl = canvas.toDataURL("image/jpeg");
+    activeBase64Image = dataUrl;
     previewImage.src = dataUrl;
     imageInfoName.textContent = "Webcam Snapshot (" + new Date().toLocaleTimeString() + ")";
     previewCard.style.display = 'block';
 
-    previewImage.onload = () => {
-        handleImageIngestion();
-    };
+    classifyActiveImage();
 }
 
-function toggleLivePredict() {
-    if (isLivePredicting) {
-        isLivePredicting = false;
-        cancelAnimationFrame(livePredictAnimationFrame);
-        livePredictBtn.classList.remove("btn-danger");
-        livePredictBtn.classList.add("btn-outline");
-        livePredictText.textContent = "Live Classify";
-    } else {
-        if (!webcamStream) return;
-        isLivePredicting = true;
-        livePredictBtn.classList.remove("btn-outline");
-        livePredictBtn.classList.add("btn-danger");
-        livePredictText.textContent = "Stop Live";
-        runLivePredictionLoop();
-    }
-}
-
-async function runLivePredictionLoop() {
-    if (!isLivePredicting || !webcamVideo) return;
-
-    if (webcamVideo.readyState === 4) {
-        try {
-            const activeModel = await loadModelForDocType(currentDocType);
-            const predictions = await activeModel.predict(webcamVideo);
-            displayPredictions(predictions, 0);
-        } catch (e) {
-            console.error("Live prediction error:", e);
-        }
-    }
-    
-    livePredictAnimationFrame = requestAnimationFrame(runLivePredictionLoop);
-}
-
-/* ==========================================================================
-   9. Teachable Machine Classification & Display Logic
-   ========================================================================== */
+/**
+ * Main API Caller for Verification Assessment
+ */
 async function classifyActiveImage() {
-    clearError();
-    showLoading(true, "Running classification model...");
+    if (!activeBase64Image) {
+        showError("Please upload or capture a document image first.");
+        return;
+    }
 
-    const startTime = performance.now();
+    clearMismatchAlerts();
+    clearError();
+    showLoading(true, `Verifying document type & checking authenticity for ${DOC_CONFIGS[currentDocType]?.label || currentDocType}...`);
 
     try {
-        const activeModel = await loadModelForDocType(currentDocType);
+        const response = await fetch("http://localhost:5001/api/verify-document", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                expected_type: currentDocType,
+                image: activeBase64Image
+            })
+        });
 
-        if (!previewImage.src || previewCard.style.display === 'none') {
-            showError("Please upload or capture an image first.");
-            showLoading(false);
+        const data = await response.json();
+        showLoading(false);
+
+        // =========================================================================
+        // HANDLE HTTP 422: DOCUMENT TYPE MISMATCH REJECTION GATE
+        // =========================================================================
+        if (response.status === 422 || (data && data.status === "wrong_document")) {
+            const mismatchMessage = data.message || "Document type mismatch detected. Please upload the correct file.";
+
+            // Show Toast Alert Banner & Inline Error Message
+            showMismatchAlert(mismatchMessage);
+
+            // Clear file input & image preview
+            if (fileInput) fileInput.value = '';
+            previewImage.src = '';
+            activeBase64Image = null;
+            previewCard.style.display = 'none';
+
+            // Reset results UI (DO NOT display any score)
+            resetResultsUI();
             return;
         }
 
-        const predictions = await activeModel.predict(previewImage);
-        const endTime = performance.now();
-        const duration = Math.round(endTime - startTime);
+        // =========================================================================
+        // HANDLE HTTP 200: AUTHENTICITY ASSESSMENT SUCCESS
+        // =========================================================================
+        if (response.ok && data && (data.status === "verified" || data.status === "suspicious" || data.status === "fake")) {
+            displayVerificationResults(data);
+        } else {
+            const errText = data.message || "Unable to complete document verification.";
+            showError(errText);
+            resetResultsUI();
+        }
 
-        displayPredictions(predictions, duration);
     } catch (err) {
-        console.error("Inference Error:", err);
-        showError("Classification failed: " + err.message);
-    } finally {
         showLoading(false);
+        console.error("Verification API Network Exception:", err);
+        showError("Cannot connect to Document Verification Backend Proxy (http://localhost:5001). Please ensure the backend server is running.");
+        resetResultsUI();
     }
 }
 
-function normalizeClassName(rawLabel) {
-    if (!rawLabel) return "UNKNOWN";
-    const clean = rawLabel.trim().toUpperCase();
-    if (clean.includes("ORIGINAL")) return "ORIGINAL";
-    if (clean.includes("FAKE")) return "FAKE";
-    return clean;
-}
-
-function displayPredictions(predictions, durationMs = 0) {
-    if (!predictions || predictions.length === 0) return;
-
+/**
+ * Renders Verification Results
+ */
+function displayVerificationResults(data) {
     resultsEmpty.style.display = 'none';
     resultsContent.style.display = 'block';
 
-    if (durationMs > 0) {
-        inferenceTimeBadge.textContent = `Inference: ${durationMs}ms`;
-        inferenceTimeBadge.style.display = 'inline-block';
-    }
+    const status = (data.status || "verified").toLowerCase();
+    const score = typeof data.confidence_score === 'number' ? data.confidence_score : 90;
+    const reasons = Array.isArray(data.reasons) ? data.reasons : [];
+    const fields = data.extracted_fields || {};
+    const summary = data.summary || "Document analysis complete.";
 
-    const docConfig = DOC_TYPES[currentDocType] || DOC_TYPES.aadhaar;
-    const topRaw = [...predictions].sort((a, b) => b.probability - a.probability)[0];
-    const topNormClass = normalizeClassName(topRaw.className);
-    const topScorePercent = (topRaw.probability * 100).toFixed(1) + "%";
-
-    verdictTopScore.textContent = topScorePercent;
-
-    const actionBox = document.getElementById("mismatch-action-box");
-    if (actionBox) actionBox.style.display = "none";
-
-    // Update Verdict Card styling according to ORIGINAL vs FAKE
-    if (topNormClass === "ORIGINAL") {
-        verdictCard.className = "verdict-card verdict-original";
+    // Render Verdict Card & Badge
+    verdictCard.className = "verdict-card";
+    if (status === "verified") {
+        verdictCard.classList.add("verdict-original");
         verdictIcon.className = "fa-solid fa-circle-check";
-        verdictTitle.textContent = "ORIGINAL";
-        verdictDesc.textContent = isMismatchOverridden 
-            ? `[Low Reliability - Document Mismatch] Authentic ${docConfig.label} format detected (${topScorePercent}).`
-            : `Authentic ${docConfig.label} detected with ${topScorePercent} confidence.`;
-    } else if (topNormClass === "FAKE") {
-        verdictCard.className = "verdict-card verdict-fake";
+        verdictStatusBadge.className = "verdict-status-badge badge-verified";
+        verdictStatusBadge.textContent = "VERIFIED";
+        verdictDesc.textContent = "Document format and security indicators pass authenticity checks.";
+    } else if (status === "suspicious") {
+        verdictCard.classList.add("verdict-suspicious");
         verdictIcon.className = "fa-solid fa-triangle-exclamation";
-        verdictTitle.textContent = "FAKE";
-        verdictDesc.textContent = isMismatchOverridden
-            ? `[Low Reliability - Document Mismatch] Potential fake ${docConfig.label} detected (${topScorePercent}).`
-            : `Potential fake or manipulated ${docConfig.label} detected (${topScorePercent} confidence).`;
+        verdictStatusBadge.className = "verdict-status-badge badge-suspicious";
+        verdictStatusBadge.textContent = "SUSPICIOUS";
+        verdictDesc.textContent = "Visual or field anomalies detected. Manual review recommended.";
     } else {
-        verdictCard.className = "verdict-card";
-        verdictIcon.className = "fa-solid fa-circle-info";
-        verdictTitle.textContent = topRaw.className.trim();
-        verdictDesc.textContent = `Predicted class: ${topRaw.className.trim()} (${topScorePercent}).`;
+        verdictCard.classList.add("verdict-fake");
+        verdictIcon.className = "fa-solid fa-circle-xmark";
+        verdictStatusBadge.className = "verdict-status-badge badge-fake";
+        verdictStatusBadge.textContent = "FAKE / FRAUDULENT";
+        verdictDesc.textContent = "High severity visual or structural tamper red flags detected.";
     }
 
-    // Update progress bars
-    let originalProb = 0;
-    let fakeProb = 0;
+    verdictTopScore.textContent = `${score}%`;
+    summaryText.textContent = summary;
 
-    predictions.forEach(pred => {
-        const norm = normalizeClassName(pred.className);
-        if (norm === "ORIGINAL") originalProb += pred.probability;
-        if (norm === "FAKE") fakeProb += pred.probability;
-    });
+    // Render Extracted Fields
+    fieldName.textContent = fields.name || "N/A";
+    fieldIdNumber.textContent = fields.id_number || "N/A";
+    fieldDob.textContent = fields.dob || "N/A";
 
-    const origScoreEl = document.getElementById("score-ORIGINAL");
-    const origBarEl = document.getElementById("bar-ORIGINAL");
-    const fakeScoreEl = document.getElementById("score-FAKE");
-    const fakeBarEl = document.getElementById("bar-FAKE");
+    // Render "Why was this flagged?" Section (for suspicious/fake or whenever reasons exist)
+    if ((status === "suspicious" || status === "fake" || reasons.length > 0) && whyFlaggedSection && reasonsList) {
+        whyFlaggedSection.style.display = 'block';
+        reasonsList.innerHTML = reasons.map(r => {
+            const catLabel = formatCategoryLabel(r.category);
+            const severityClass = r.severity === 'high' ? 'severity-high' : (r.severity === 'medium' ? 'severity-medium' : 'severity-low');
+            const severityText = (r.severity || 'medium').toUpperCase();
 
-    if (origScoreEl && origBarEl) {
-        const origPct = (originalProb * 100).toFixed(1);
-        origScoreEl.textContent = `${origPct}%`;
-        origBarEl.style.width = `${origPct}%`;
-    }
-
-    if (fakeScoreEl && fakeBarEl) {
-        const fakePct = (fakeProb * 100).toFixed(1);
-        fakeScoreEl.textContent = `${fakePct}%`;
-        fakeBarEl.style.width = `${fakePct}%`;
-    }
-
-    // Trigger AI Chatbot panel activation (ONLY IF FAKE AND NO ACTIVE UNRESOLVED MISMATCH)
-    if (typeof handleChatbotVisibility === "function") {
-        if (!isMismatchActive) {
-            handleChatbotVisibility(topNormClass, docConfig.label, topScorePercent);
-        } else {
-            hideChatbotPanel();
-        }
+            return `
+                <div class="reason-item ${severityClass}">
+                    <div class="reason-header">
+                        <span class="category-badge"><i class="fa-solid fa-tag"></i> ${catLabel}</span>
+                        <span class="severity-pill ${severityClass}">${severityText} SEVERITY</span>
+                    </div>
+                    <p class="reason-finding">${r.finding || 'Anomalous document feature detected.'}</p>
+                </div>
+            `;
+        }).join('');
+    } else if (whyFlaggedSection) {
+        whyFlaggedSection.style.display = 'none';
     }
 }
 
-/* ==========================================================================
-   10. UI Helpers
-   ========================================================================== */
-function showLoading(isLoading, customText = "Analyzing document features...") {
+function formatCategoryLabel(cat) {
+    if (!cat) return "Security Feature";
+    const map = {
+        font: "Font & Typography",
+        layout: "Layout & Format",
+        photo: "Photo & Edge Integrity",
+        hologram_qr: "Hologram / QR Code",
+        number_format: "ID Number Format",
+        text_consistency: "Text Consistency",
+        image_quality: "Image Quality",
+        metadata: "File Metadata"
+    };
+    return map[cat.toLowerCase()] || cat.replace(/_/g, ' ').toUpperCase();
+}
+
+/**
+ * UI Alert & Error State Helpers
+ */
+function showMismatchAlert(msg) {
+    if (docMismatchBanner && mismatchBannerText) {
+        mismatchBannerText.textContent = msg;
+        docMismatchBanner.style.display = 'flex';
+    }
+    if (uploadInlineError && uploadInlineErrorText) {
+        uploadInlineErrorText.textContent = msg;
+        uploadInlineError.style.display = 'flex';
+    }
+}
+
+function clearMismatchAlerts() {
+    if (docMismatchBanner) docMismatchBanner.style.display = 'none';
+    if (uploadInlineError) uploadInlineError.style.display = 'none';
+}
+
+function showLoading(isLoading, text = "Analyzing document features...") {
     if (isLoading) {
         resultsEmpty.style.display = 'none';
         resultsContent.style.display = 'none';
         resultsLoading.style.display = 'block';
-        const p = resultsLoading.querySelector('p');
-        if (p) p.textContent = customText;
+        if (resultsLoadingText) resultsLoadingText.textContent = text;
     } else {
         resultsLoading.style.display = 'none';
     }
 }
 
 function showError(msg) {
-    errorMessage.innerHTML = maskSensitiveIdNumbers(msg);
-    errorBanner.style.display = 'flex';
+    if (errorMessage && errorBanner) {
+        errorMessage.textContent = msg;
+        errorBanner.style.display = 'flex';
+    }
 }
 
 function clearError() {
-    errorBanner.style.display = 'none';
-    errorMessage.innerHTML = '';
+    if (errorBanner) errorBanner.style.display = 'none';
 }
 
 function resetResultsUI() {
     resultsEmpty.style.display = 'block';
     resultsContent.style.display = 'none';
     resultsLoading.style.display = 'none';
-    inferenceTimeBadge.style.display = 'none';
-    if (typeof hideChatbotPanel === "function") {
-        hideChatbotPanel();
-    }
     clearError();
 }

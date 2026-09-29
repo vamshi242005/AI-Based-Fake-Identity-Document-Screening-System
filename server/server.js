@@ -9,62 +9,158 @@ const PORT = process.env.PORT || 5001;
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 
-// System Instructions
-const IDENTIFY_SYSTEM_INSTRUCTION = `You are an expert Indian identity document recognition system. Analyze the provided image carefully and determine which Indian document type it is. Respond strictly in valid JSON matching the requested schema.`;
-
-const EXPLAIN_SYSTEM_INSTRUCTION = `You are a document verification assistant. You are shown an image of an Indian identity document, its confirmed type, and the output of a machine learning classifier (a probability, not proof).
-
-Carefully examine the whole image: header text and logos, emblem, fonts and alignment, photo and its edges, QR code or barcode, hologram or ghost-image area, printed fields, number format, print and scan quality, glare, cropping, and signs of screenshots or re-photographed screens.
-
-Start by stating what document you see and describe what is actually visible. Then list only red flags you can point to in this specific image. If a feature isn't visible or the image is blurry, say so instead of guessing. Never invent details, never mention features of other document types, and never declare the document definitely fake or genuine. Stay on topic.`;
-
-// Generation Configs
-const EXPLAIN_GENERATION_CONFIG = {
-    temperature: 0.3,
-    topP: 0.8,
-    maxOutputTokens: 700
-};
-
-const IDENTIFY_GENERATION_CONFIG = {
-    temperature: 0.1,
-    topP: 0.8,
-    maxOutputTokens: 300,
-    responseMimeType: "application/json"
+// Document Type Labels
+const DOC_LABELS = {
+    aadhaar: "Aadhaar Card",
+    pan: "PAN Card",
+    pancard: "PAN Card",
+    voter_id: "Voter ID",
+    voterid: "Voter ID",
+    passport: "Passport",
+    other: "Non-Identity File / Random Photo",
+    unreadable: "Unreadable / Blurry Document"
 };
 
 /**
- * Mask sensitive PII in text for server logs
+ * Normalizes document type strings
  */
-function maskSensitiveText(text) {
-    if (!text || typeof text !== 'string') return text;
-    // Mask 12-digit Aadhaar numbers: 1234 5678 9012 -> XXXX-XXXX-9012
-    let masked = text.replace(/\b\d{4}\s?\d{4}\s?(\d{4})\b/g, 'XXXX-XXXX-$1');
-    // Mask 10-char PAN numbers: ABCDE1234F -> XXXXX1234F
-    masked = masked.replace(/\b[A-Z]{5}(\d{4}[A-Z])\b/g, 'XXXXX$1');
-    return masked;
+function normalizeDocType(typeStr) {
+    if (!typeStr || typeof typeStr !== 'string') return 'other';
+    const clean = typeStr.toLowerCase().trim().replace(/[\s\-_]/g, '');
+    if (clean.includes('aadhaar') || clean.includes('uidai')) return 'aadhaar';
+    if (clean.includes('pan')) return 'pan';
+    if (clean.includes('voter') || clean.includes('epic')) return 'voter_id';
+    if (clean.includes('passport')) return 'passport';
+    if (clean.includes('unreadable') || clean.includes('blurry') || clean.includes('blank')) return 'unreadable';
+    return 'other';
 }
 
 /**
- * Masked Server Logging Helper
+ * Verhoeff Checksum Algorithm for Aadhaar Validation
  */
-function logServerEvent(tag, payload = {}) {
-    console.log(`\n=================== [SERVER LOG: ${tag}] ===================`);
-    console.log(`Timestamp: ${new Date().toISOString()}`);
-    if (payload.imageSizeKB !== undefined) console.log(`Image Size: ${payload.imageSizeKB} KB`);
-    if (payload.hasImage !== undefined) console.log(`Image Attached: ${payload.hasImage}`);
-    if (payload.selectedType) console.log(`Selected Type: ${payload.selectedType}`);
-    if (payload.detectedType) console.log(`Detected Type: ${payload.detectedType}`);
-    if (payload.confidence) console.log(`Confidence: ${payload.confidence}`);
-    if (payload.evidence) console.log(`Visible Evidence: ${JSON.stringify(payload.evidence)}`);
-    if (payload.message) console.log(`Message: ${maskSensitiveText(payload.message)}`);
-    console.log(`===========================================================\n`);
+const verhoeffTableD = [
+    [0,1,2,3,4,5,6,7,8,9],
+    [1,2,3,4,0,6,7,8,9,5],
+    [2,3,4,0,1,7,8,9,5,6],
+    [3,4,0,1,2,8,9,5,6,7],
+    [4,0,1,2,3,9,5,6,7,8],
+    [5,9,8,7,6,0,4,3,2,1],
+    [6,5,9,8,7,1,0,4,3,2],
+    [7,6,5,9,8,2,1,0,4,3],
+    [8,7,6,5,9,3,2,1,0,4],
+    [9,8,7,6,5,4,3,2,1,0]
+];
+
+const verhoeffTableP = [
+    [0,1,2,3,4,5,6,7,8,9],
+    [1,5,7,6,2,8,3,0,9,4],
+    [5,8,0,3,7,9,6,1,4,2],
+    [8,9,1,6,0,4,3,5,2,7],
+    [9,4,5,3,1,2,6,8,7,0],
+    [4,2,8,6,5,7,3,9,0,1],
+    [2,7,9,3,8,0,6,4,1,5],
+    [7,0,4,6,9,1,3,2,5,8]
+];
+
+function validateVerhoeff(numStr) {
+    if (!numStr || !/^\d+$/.test(numStr)) return false;
+    let c = 0;
+    const array = numStr.split('').map(Number).reverse();
+    for (let i = 0; i < array.length; i++) {
+        c = verhoeffTableD[c][verhoeffTableP[i % 8][array[i]]];
+    }
+    return c === 0;
 }
 
 /**
- * Extracts and cleans base64 image data and mimeType
+ * Backend Rule-Based Checks for Extracted ID Fields
  */
-function extractBase64Data(rawImageData) {
-    if (!rawImageData) return null;
+function runBackendRuleChecks(docType, extractedFields) {
+    const findings = [];
+    const idNumber = (extractedFields && extractedFields.id_number) ? String(extractedFields.id_number).trim() : '';
+
+    if (!idNumber || idNumber.toLowerCase() === 'n/a' || idNumber.toLowerCase() === 'unknown' || idNumber.toLowerCase() === 'none') {
+        return findings;
+    }
+
+    const normType = normalizeDocType(docType);
+
+    if (normType === 'aadhaar') {
+        const clean = idNumber.replace(/\D/g, '');
+        if (clean.length !== 12) {
+            findings.push({
+                category: "number_format",
+                finding: `Aadhaar number '${idNumber}' must contain exactly 12 digits (found ${clean.length} digits).`,
+                severity: "high"
+            });
+        } else {
+            if (clean[0] === '0' || clean[0] === '1') {
+                findings.push({
+                    category: "number_format",
+                    finding: `Aadhaar number '${idNumber}' starts with an invalid digit ('${clean[0]}'). First digit cannot be 0 or 1.`,
+                    severity: "high"
+                });
+            }
+            if (!validateVerhoeff(clean)) {
+                findings.push({
+                    category: "number_format",
+                    finding: `Aadhaar number '${idNumber}' fails Verhoeff checksum validation algorithm.`,
+                    severity: "high"
+                });
+            }
+        }
+    } else if (normType === 'pan') {
+        const clean = idNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+        if (!panRegex.test(clean)) {
+            findings.push({
+                category: "number_format",
+                finding: `PAN number '${idNumber}' does not match standard 10-character alphanumeric pattern (AAAAA9999A).`,
+                severity: "high"
+            });
+        } else {
+            const validHolders = ['P', 'C', 'H', 'F', 'A', 'B', 'G', 'J', 'L', 'T'];
+            if (!validHolders.includes(clean[3])) {
+                findings.push({
+                    category: "number_format",
+                    finding: `4th character '${clean[3]}' of PAN '${idNumber}' is invalid. Must be one of: P, C, H, F, A, B, G, J, L, T.`,
+                    severity: "high"
+                });
+            }
+        }
+    } else if (normType === 'passport') {
+        const clean = idNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        const passportRegex = /^[A-PR-WYa-pr-wy][0-9]{7}$/;
+        if (!passportRegex.test(clean)) {
+            findings.push({
+                category: "number_format",
+                finding: `Passport number '${idNumber}' does not match standard Indian passport format (1 letter followed by 7 digits).`,
+                severity: "high"
+            });
+        }
+    } else if (normType === 'voter_id') {
+        const clean = idNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        const voterRegex = /^[A-Z]{3}[0-9]{7}$/;
+        if (!voterRegex.test(clean)) {
+            findings.push({
+                category: "number_format",
+                finding: `Voter ID EPIC number '${idNumber}' format is invalid (expected 3 letters followed by 7 digits).`,
+                severity: "high"
+            });
+        }
+    }
+
+    return findings;
+}
+
+/**
+ * Extracts and validates base64 image payload (max 10MB)
+ */
+function extractAndValidateImage(rawImageData) {
+    if (!rawImageData) {
+        throw { statusCode: 400, message: "No image payload was provided in the request." };
+    }
+
     let base64String = "";
     let mimeType = "image/jpeg";
 
@@ -75,26 +171,38 @@ function extractBase64Data(rawImageData) {
         if (rawImageData.mimeType) mimeType = rawImageData.mimeType;
     }
 
-    if (!base64String) return null;
+    if (!base64String) {
+        throw { statusCode: 400, message: "Image payload contains no base64 content." };
+    }
 
-    const match = base64String.match(/^data:(image\/[a-zA-Z0-9\+\-\.]+);base64,/);
+    const match = base64String.match(/^data:([a-zA-Z0-9\+\-\.\/]+);base64,/);
     if (match) {
-        mimeType = match[1];
+        mimeType = match[1].toLowerCase();
         base64String = base64String.substring(match[0].length);
     }
 
+    // Allowed MIME types: image/jpeg, image/png, image/webp, application/pdf
+    const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
+    if (!allowedMimeTypes.includes(mimeType)) {
+        throw { statusCode: 400, message: `Unsupported file format '${mimeType}'. Allowed formats: JPG, PNG, WEBP, PDF.` };
+    }
+
     base64String = base64String.replace(/\s/g, '');
-    const sizeInKB = Math.round((base64String.length * 0.75) / 1024);
+    const sizeInMB = (base64String.length * 0.75) / (1024 * 1024);
+
+    if (sizeInMB > 10.0) {
+        throw { statusCode: 400, message: `File size (${sizeInMB.toFixed(2)} MB) exceeds maximum limit of 10 MB.` };
+    }
 
     return {
         mimeType,
         base64Data: base64String,
-        sizeInKB
+        sizeInMB: parseFloat(sizeInMB.toFixed(2))
     };
 }
 
 /**
- * REST helper to execute Gemini multimodal requests across supported models
+ * Helper to call Gemini REST API safely
  */
 async function callGemini(contents, options = {}) {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -110,7 +218,12 @@ async function callGemini(contents, options = {}) {
     ];
 
     let lastError = null;
-    const generationConfig = options.generationConfig || EXPLAIN_GENERATION_CONFIG;
+    const generationConfig = options.generationConfig || {
+        temperature: 0.1,
+        topP: 0.8,
+        maxOutputTokens: 1000,
+        responseMimeType: "application/json"
+    };
 
     for (const modelName of models) {
         try {
@@ -136,28 +249,27 @@ async function callGemini(contents, options = {}) {
 
             if (response.ok && data.candidates && data.candidates.length > 0) {
                 const rawText = data.candidates[0].content.parts.map(p => p.text).join('\n');
-                console.log(`[Gemini Success] Model: ${modelName}`);
                 return rawText;
             } else if (data.error) {
-                console.warn(`[Gemini Warning] Model ${modelName} error: ${data.error.message}`);
+                console.warn(`[Gemini API Warning] ${modelName}: ${data.error.message}`);
                 lastError = new Error(data.error.message || `API Error from ${modelName}`);
             }
         } catch (err) {
-            console.warn(`[Gemini Exception] Model ${modelName}: ${err.message}`);
+            console.warn(`[Gemini API Exception] ${modelName}: ${err.message}`);
             lastError = err;
         }
     }
 
-    throw lastError || new Error("Failed to receive valid response from Gemini Vision API.");
+    throw lastError || new Error("Failed to receive valid response from Gemini API.");
 }
 
 /**
- * Strict JSON parser for Step 1 Document Identification
+ * Robust JSON Parser that strips code fences and handles errors safely
  */
 function parseJsonOutput(rawText) {
     if (!rawText) return null;
     let clean = rawText.trim();
-    clean = clean.replace(/^```json|^```/i, '').replace(/```$/i, '').trim();
+    clean = clean.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
 
     try {
         return JSON.parse(clean);
@@ -171,36 +283,55 @@ function parseJsonOutput(rawText) {
 }
 
 /**
- * POST /api/identify-doc (Step 1 Mismatch Gate)
+ * POST /api/verify-document
+ * Main Verification Endpoint implementing Document Classification Gate & Authenticity Analysis
  */
-app.post('/api/identify-doc', async (req, res) => {
+app.post('/api/verify-document', async (req, res) => {
     try {
-        const { image, selectedType = 'unknown' } = req.body;
-        const imgObj = extractBase64Data(image);
+        const { expected_type, image } = req.body;
 
-        if (!imgObj) {
-            logServerEvent("IDENTIFY_DOC_FAIL", { selectedType, message: "No valid image data provided" });
+        if (!expected_type) {
             return res.status(400).json({
-                success: false,
-                message: "No valid image data provided."
+                status: "error",
+                message: "Expected document type ('expected_type') is required."
             });
         }
 
-        logServerEvent("IDENTIFY_DOC_REQUEST", {
-            selectedType,
-            hasImage: true,
-            imageSizeKB: imgObj.sizeInKB
-        });
+        const normalizedExpected = normalizeDocType(expected_type);
 
-        const promptText = `Examine this document image. Identify the Indian document type.
-Return a STRICT JSON object ONLY matching this schema, with no markdown code blocks:
+        // Validate File format & size (Max 10MB)
+        let imgObj = null;
+        try {
+            imgObj = extractAndValidateImage(image);
+        } catch (valErr) {
+            return res.status(valErr.statusCode || 400).json({
+                status: "error",
+                message: valErr.message
+            });
+        }
+
+        console.log(`\n=================== [VERIFY DOCUMENT REQUEST] ===================`);
+        console.log(`Expected Type: ${normalizedExpected} (${DOC_LABELS[normalizedExpected] || normalizedExpected})`);
+        console.log(`Image Format: ${imgObj.mimeType}, Size: ${imgObj.sizeInMB} MB`);
+        console.log(`=================================================================\n`);
+
+        // =========================================================================
+        // STEP A: DOCUMENT TYPE DETECTION & MISMATCH REJECTION GATE
+        // =========================================================================
+        const detectionPrompt = `Examine this uploaded document image. Identify which identity document type it is based on these specific cues:
+- Aadhaar: 12-digit number (XXXX XXXX XXXX), UIDAI logo, "Aadhaar" text, QR code, "Unique Identification Authority of India"
+- PAN: 10-character alphanumeric (AAAAA9999A), "Income Tax Department", "Permanent Account Number"
+- Voter ID: "Election Commission of India", EPIC number, "Elector's Photo Identity Card"
+- Passport: MRZ lines at the bottom (P<IND...), "Republic of India", passport number, booklet-style page
+
+Return ONLY a strict JSON object with no markdown fences matching this schema:
 {
-  "detectedType": "aadhaar" | "pan" | "passport" | "voterid" | "other" | "unreadable",
-  "confidence": "high" | "medium" | "low",
-  "visibleEvidence": ["2-3 short cues actually seen in the image, e.g. UIDAI logo, 12-digit number in 4-4-4 grouping, Income Tax emblem"]
+  "detected_type": "aadhaar" | "pan" | "voter_id" | "passport" | "other" | "unreadable",
+  "type_confidence": 0-100,
+  "reasoning": "what visual or text cues were detected in the image"
 }`;
 
-        const contents = [
+        const detectionContents = [
             {
                 role: 'user',
                 parts: [
@@ -210,244 +341,220 @@ Return a STRICT JSON object ONLY matching this schema, with no markdown code blo
                             data: imgObj.base64Data
                         }
                     },
-                    { text: promptText }
+                    { text: detectionPrompt }
                 ]
             }
         ];
 
-        const rawResult = await callGemini(contents, {
-            systemInstruction: IDENTIFY_SYSTEM_INSTRUCTION,
-            generationConfig: IDENTIFY_GENERATION_CONFIG
-        });
-
-        const jsonOutput = parseJsonOutput(rawResult);
-
-        if (jsonOutput && jsonOutput.detectedType) {
-            let normType = jsonOutput.detectedType.toLowerCase().trim();
-            if (normType === "pancard" || normType === "pan_card" || normType === "pan card") normType = "pan";
-
-            logServerEvent("IDENTIFY_DOC_SUCCESS", {
-                selectedType,
-                detectedType: normType,
-                confidence: jsonOutput.confidence || "high",
-                evidence: jsonOutput.visibleEvidence || []
-            });
-
-            return res.json({
-                success: true,
-                detectedType: normType,
-                confidence: jsonOutput.confidence || "high",
-                visibleEvidence: Array.isArray(jsonOutput.visibleEvidence) ? jsonOutput.visibleEvidence : ["Identified from document layout."]
+        let rawDetectionText = null;
+        try {
+            rawDetectionText = await callGemini(detectionContents);
+        } catch (apiErr) {
+            console.error("Gemini API call failed during document type classification:", apiErr.message);
+            return res.status(500).json({
+                status: "error",
+                message: "AI Document Detection Service is unavailable: " + apiErr.message
             });
         }
 
-        logServerEvent("IDENTIFY_DOC_FALLBACK", { selectedType, message: "Unparseable Gemini output" });
-        return res.json({
-            success: true,
-            detectedType: "other",
-            confidence: "low",
-            visibleEvidence: ["Unclear or unrecognized layout."]
-        });
+        const detectionResult = parseJsonOutput(rawDetectionText);
 
-    } catch (error) {
-        console.error("Error in /api/identify-doc:", error.message);
-        logServerEvent("IDENTIFY_DOC_ERROR", { message: error.message });
-        res.json({
-            success: true,
-            detectedType: "other",
-            confidence: "low",
-            visibleEvidence: ["Image identification unavailable: " + error.message]
-        });
+        if (!detectionResult || !detectionResult.detected_type) {
+            console.warn("Unparseable output from classification model:", rawDetectionText);
+            return res.status(422).json({
+                status: "wrong_document",
+                expected: normalizedExpected,
+                detected: "unreadable",
+                message: `The uploaded image could not be recognized as a valid ${DOC_LABELS[normalizedExpected] || normalizedExpected}. Please upload a clear document image.`
+            });
+        }
+
+        const normalizedDetected = normalizeDocType(detectionResult.detected_type);
+
+        console.log(`[Classification Gate Result] Expected: '${normalizedExpected}' vs Detected: '${normalizedDetected}' (Confidence: ${detectionResult.type_confidence}%)`);
+        console.log(`Reasoning: ${detectionResult.reasoning}`);
+
+        // MISMATCH REJECTION GATE: If detected_type DOES NOT MATCH expected_type or is "other"/"unreadable"
+        if (normalizedDetected !== normalizedExpected || normalizedDetected === 'other' || normalizedDetected === 'unreadable') {
+            const expectedName = DOC_LABELS[normalizedExpected] || normalizedExpected.toUpperCase();
+            const detectedName = DOC_LABELS[normalizedDetected] || normalizedDetected.toUpperCase();
+
+            let mismatchMsg = `You selected ${expectedName} but the uploaded file looks like ${detectedName}. Please upload the correct document.`;
+            if (normalizedDetected === 'other') {
+                mismatchMsg = `You selected ${expectedName}, but the uploaded file appears to be a random photo or unsupported file type. Please upload a valid ${expectedName}.`;
+            } else if (normalizedDetected === 'unreadable') {
+                mismatchMsg = `You selected ${expectedName}, but the uploaded image is too blurry, dark, or unreadable to verify. Please upload a clear, full-frame image.`;
+            }
+
+            console.warn(`[MISMATCH REJECTED] HTTP 422: ${mismatchMsg}`);
+
+            return res.status(422).json({
+                status: "wrong_document",
+                expected: normalizedExpected,
+                detected: normalizedDetected,
+                message: mismatchMsg
+            });
+        }
+
+        // =========================================================================
+        // STEP B: AUTHENTICITY CHECK (RUNS ONLY WHEN TYPE MATCHES)
+        // =========================================================================
+        console.log(`[Type Match Confirmed] Proceeding to Authenticity Analysis for ${normalizedExpected}...`);
+
+        const authenticityPrompt = `You are an expert document authenticity and security inspector analyzing an uploaded ${DOC_LABELS[normalizedExpected]}.
+
+Thoroughly inspect the image for visual, structural, and textual authenticity cues:
+1. Font & Typography: Inconsistent font styles, altered characters, blurry text, irregular character alignment.
+2. Layout & Formatting: Misaligned fields, incorrect logos, missing official emblems or headers.
+3. Photo & Edge Integrity: Paste lines around photo, inconsistent lighting, laminate edge tampering, headshot cutout artifacts.
+4. Hologram / QR Code / Watermark: Absent, corrupt, unreadable, or fake QR codes; missing micro-printing or holograms.
+5. Number Format: ID number syntax or structure errors.
+6. Text Consistency: Inconsistencies between printed fields (Name, DOB, ID Number) and background pattern/watermark.
+7. Image Quality: Digital screen Moire patterns, screenshot artifacts, heavy editing, or glare hiding security features.
+
+Extract PII fields where visible (Name, ID Number, DOB).
+
+Return ONLY a strict JSON object with no markdown fences matching this schema:
+{
+  "status": "verified" | "suspicious" | "fake",
+  "confidence_score": 0-100,
+  "reasons": [
+    {
+      "category": "font | layout | photo | hologram_qr | number_format | text_consistency | image_quality | metadata",
+      "finding": "specific detailed observation of why this feature is original or suspicious/fake",
+      "severity": "low | medium | high"
     }
-});
+  ],
+  "extracted_fields": {
+    "name": "Extracted Full Name or N/A",
+    "id_number": "Extracted Document ID Number or N/A",
+    "dob": "Extracted Date of Birth or N/A"
+  },
+  "summary": "2-3 sentence concise explanation summarizing the findings."
+}`;
 
-/**
- * Builds multimodal contents payload ending with a user turn
- */
-function buildExplainMultimodalContents(imageObj, docType, confidenceScore, chatHistory, userMessage) {
-    const contents = [];
-    const userParts = [];
+        const authenticityContents = [
+            {
+                role: 'user',
+                parts: [
+                    {
+                        inline_data: {
+                            mime_type: imgObj.mimeType,
+                            data: imgObj.base64Data
+                        }
+                    },
+                    { text: authenticityPrompt }
+                ]
+            }
+        ];
 
-    if (imageObj && imageObj.base64Data) {
-        userParts.push({
-            inline_data: {
-                mime_type: imageObj.mimeType,
-                data: imageObj.base64Data
+        let rawAuthenticityText = null;
+        try {
+            rawAuthenticityText = await callGemini(authenticityContents);
+        } catch (authErr) {
+            console.error("Gemini API call failed during authenticity analysis:", authErr.message);
+            return res.status(500).json({
+                status: "error",
+                message: "Authenticity Analysis Service failed: " + authErr.message
+            });
+        }
+
+        let aiReport = parseJsonOutput(rawAuthenticityText);
+
+        if (!aiReport) {
+            console.warn("Unparseable output from authenticity model:", rawAuthenticityText);
+            aiReport = {
+                status: "suspicious",
+                confidence_score: 60,
+                reasons: [{
+                    category: "image_quality",
+                    finding: "Automated AI visual parser returned unparseable text format; manual verification recommended.",
+                    severity: "medium"
+                }],
+                extracted_fields: { name: "N/A", id_number: "N/A", dob: "N/A" },
+                summary: "The system could not fully parse automated AI visual indicators. Manual inspection is recommended."
+            };
+        }
+
+        // Run Rule-Based Backend Checks on extracted fields
+        const ruleFindings = runBackendRuleChecks(normalizedExpected, aiReport.extracted_fields || {});
+        let reasons = Array.isArray(aiReport.reasons) ? aiReport.reasons : [];
+
+        if (ruleFindings.length > 0) {
+            console.log(`[Rule Checks Failed] Added ${ruleFindings.length} rule violation findings.`);
+            reasons = [...ruleFindings, ...reasons];
+        }
+
+        // Calculate final confidence score based on severity penalties
+        let baseScore = typeof aiReport.confidence_score === 'number' ? aiReport.confidence_score : 85;
+        let highCount = 0;
+        let medCount = 0;
+
+        reasons.forEach(r => {
+            if (r.severity === 'high') {
+                baseScore -= 25;
+                highCount++;
+            } else if (r.severity === 'medium') {
+                baseScore -= 15;
+                medCount++;
+            } else if (r.severity === 'low') {
+                baseScore -= 5;
             }
         });
-    }
 
-    const perTypeChecklists = {
-        aadhaar: "Aadhaar Reference Checklist: UIDAI logo, Government of India header, 12-digit number in 4-4-4 grouping, QR code, ghost image, structured address block.",
-        pan: "PAN Reference Checklist: Income Tax Department header, 10-character alphanumeric number (AAAAA9999A pattern), photo, signature, DOB and Father's Name fields.",
-        pancard: "PAN Reference Checklist: Income Tax Department header, 10-character alphanumeric number (AAAAA9999A pattern), photo, signature, DOB and Father's Name fields.",
-        passport: "Passport Reference Checklist: MRZ (Machine Readable Zone) lines at bottom, photo page laminate, Republic of India emblem, watermark, passport number format.",
-        voterid: "Voter ID Reference Checklist: EPIC number of 3 letters + 7 digits, Election Commission of India marking/seal, hologram, photo lamination."
-    };
+        // Clamp final score to [0, 100]
+        let finalScore = Math.max(0, Math.min(100, Math.round(baseScore)));
 
-    const docKey = docType.toLowerCase().replace(/\s+/g, '');
-    const checklistText = perTypeChecklists[docKey] || perTypeChecklists.aadhaar;
-
-    let initialPrompt = `Document Type Confirmed: ${docType}
-Classifier Verdict: FAKE
-Classifier Confidence: ${confidenceScore}
-${checklistText}
-
-Examine the whole image. Follow the exact required output format:
-
-**What I see:**
-[2-3 lines describing what is actually visible in THIS specific image]
-
-**Possible red flags:**
-• [Red flag 1 tied strictly to something visible in this image]
-• [Red flag 2]
-• [Red flag 3]
-
-**What to verify next:**
-[Official verification portal steps for ${docType}]
-
-*Disclaimer: This is an automated preliminary assessment based on visual indicators and classifier probabilities. It is not legal proof of authenticity.*`;
-
-    if (userMessage) {
-        initialPrompt += `\n\nUser Follow-up Query: ${userMessage}`;
-    }
-
-    userParts.push({ text: initialPrompt });
-
-    contents.push({
-        role: 'user',
-        parts: userParts
-    });
-
-    if (Array.isArray(chatHistory) && chatHistory.length > 0) {
-        chatHistory.forEach(msg => {
-            contents.push({
-                role: msg.sender === 'user' ? 'user' : 'model',
-                parts: [{ text: maskSensitiveText(msg.text) }]
-            });
-        });
-
-        // Ensure turn sequence ends on user role
-        if (contents[contents.length - 1].role === 'model') {
-            contents.push({
-                role: 'user',
-                parts: [{ text: userMessage ? maskSensitiveText(userMessage) : "Please describe visual red flags visible in this document image." }]
-            });
+        // Determine final status based on thresholds
+        let finalStatus = "verified";
+        if (finalScore >= 80 && highCount === 0) {
+            finalStatus = "verified";
+        } else if (finalScore >= 50 && finalScore <= 79) {
+            finalStatus = "suspicious";
+        } else {
+            finalStatus = "fake";
         }
-    }
 
-    return contents;
-}
-
-/**
- * POST /api/explain-fake
- */
-app.post('/api/explain-fake', async (req, res) => {
-    try {
-        const { docType = 'Identity Document', confidenceScore = '90%', image, chatHistory = [], userMessage } = req.body;
-        const imgObj = extractBase64Data(image);
-
-        logServerEvent("EXPLAIN_FAKE_REQUEST", {
-            selectedType: docType,
-            confidence: confidenceScore,
-            hasImage: !!(imgObj && imgObj.base64Data),
-            imageSizeKB: imgObj ? imgObj.sizeInKB : 0
-        });
-
-        if (!imgObj || !imgObj.base64Data) {
-            return res.json({
-                success: true,
-                explanation: `**What I see:**
-No image data was received by the server.
-
-**Possible red flags:**
-• Image payload was missing or not attached to the analysis request.
-
-**What to verify next:**
-• Please re-upload a clear image of your ${docType} to enable visual AI inspection.`
+        // Enforce requirement: If status is suspicious or fake, reasons MUST NOT be empty!
+        if ((finalStatus === "suspicious" || finalStatus === "fake") && reasons.length === 0) {
+            reasons.push({
+                category: "layout",
+                finding: `Visual and structural anomalies detected for ${DOC_LABELS[normalizedExpected]}. Overall verification confidence is low (${finalScore}%).`,
+                severity: finalStatus === "fake" ? "high" : "medium"
             });
         }
 
-        const contents = buildExplainMultimodalContents(imgObj, docType, confidenceScore, chatHistory, userMessage);
+        const summaryText = aiReport.summary || `${DOC_LABELS[normalizedExpected]} analysis complete. Overall verdict: ${finalStatus.toUpperCase()} with ${finalScore}% confidence.`;
 
-        const explanation = await callGemini(contents, {
-            systemInstruction: EXPLAIN_SYSTEM_INSTRUCTION,
-            generationConfig: EXPLAIN_GENERATION_CONFIG
-        });
+        console.log(`[Verification Complete] Final Verdict: ${finalStatus.toUpperCase()} (${finalScore}%), Reasons: ${reasons.length}`);
 
-        logServerEvent("EXPLAIN_FAKE_SUCCESS", {
-            selectedType: docType,
-            message: "Successfully generated grounded explanation"
-        });
-
-        res.json({
-            success: true,
-            explanation: explanation
+        return res.json({
+            status: finalStatus,
+            confidence_score: finalScore,
+            reasons: reasons,
+            extracted_fields: aiReport.extracted_fields || { name: "N/A", id_number: "N/A", dob: "N/A" },
+            summary: summaryText
         });
 
     } catch (error) {
-        console.error("Error in /api/explain-fake:", error.message);
-        logServerEvent("EXPLAIN_FAKE_ERROR", { message: error.message });
-
-        const fallbackResponse = `**What I see:**
-I have examined the uploaded ${req.body.docType || 'identity document'} image.
-
-**Possible red flags:**
-• Computer vision classification model flagged structural or layout anomalies with ${req.body.confidenceScore || 'high'} confidence.
-• Network or service disruption (${error.message}).
-
-**What to verify next:**
-• Verify document details directly on the official issuing authority portal.
-
-*Disclaimer: This is an automated preliminary assessment based on visual indicators and classifier probabilities. It is not legal proof of authenticity.*`;
-
-        res.json({
-            success: true,
-            explanation: fallbackResponse
+        console.error("Unexpected Error in /api/verify-document:", error);
+        return res.status(500).json({
+            status: "error",
+            message: "An unexpected server error occurred: " + error.message
         });
     }
 });
 
-/**
- * POST /api/chat
- */
-app.post('/api/chat', async (req, res) => {
-    try {
-        const { docType = 'Identity Document', confidenceScore = '90%', image, chatHistory = [], userMessage } = req.body;
-        const imgObj = extractBase64Data(image);
-
-        logServerEvent("CHAT_REQUEST", {
-            selectedType: docType,
-            hasImage: !!(imgObj && imgObj.base64Data),
-            imageSizeKB: imgObj ? imgObj.sizeInKB : 0,
-            message: userMessage
-        });
-
-        const contents = buildExplainMultimodalContents(imgObj, docType, confidenceScore, chatHistory, userMessage);
-
-        const responseText = await callGemini(contents, {
-            systemInstruction: EXPLAIN_SYSTEM_INSTRUCTION,
-            generationConfig: EXPLAIN_GENERATION_CONFIG
-        });
-
-        res.json({
-            success: true,
-            explanation: responseText
-        });
-
-    } catch (error) {
-        console.error("Error in /api/chat:", error.message);
-        logServerEvent("CHAT_ERROR", { message: error.message });
-        res.json({
-            success: false,
-            message: "Unable to process chat request: " + error.message
-        });
-    }
+// Legacy Endpoint Aliases for Backward Compatibility
+app.post('/api/identify-doc', async (req, res) => {
+    req.body.expected_type = req.body.selectedType || 'aadhaar';
+    return app._router.handle(req, res, () => {});
 });
 
 // Start Express Server
 app.listen(PORT, () => {
     console.log(`\n===========================================================`);
-    console.log(`  Multimodal Vision Backend Proxy running on http://localhost:${PORT}`);
+    console.log(`  AI Document Verification Proxy running on http://localhost:${PORT}`);
+    console.log(`  Target verification endpoint: POST http://localhost:${PORT}/api/verify-document`);
     console.log(`===========================================================\n`);
 });

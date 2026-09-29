@@ -1166,111 +1166,260 @@ body {
 }
 
 /* ==========================================================================
-   Document Type Mismatch Warning Banner Styles
+   Document Verification & Mismatch Rejection Gate Styles
    ========================================================================== */
+
+/* Toast / Banner Red Alert */
 .doc-mismatch-banner {
     margin: 1rem 0;
     padding: 0.9rem 1.1rem;
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid rgba(245, 158, 11, 0.4);
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.5);
     border-radius: var(--radius-md);
-    color: #fef3c7;
+    color: #fca5a5;
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    font-size: 0.925rem;
+    line-height: 1.4;
     animation: fadeIn 0.3s ease-in-out;
 }
 
-.mismatch-content {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    flex-wrap: wrap;
-}
-
-.mismatch-content.info-mode {
-    background: rgba(59, 130, 246, 0.1);
-    border-color: rgba(59, 130, 246, 0.3);
-    color: #dbeafe;
-}
-
-.mismatch-text {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    font-size: 0.9rem;
-    line-height: 1.4;
-    flex: 1;
-}
-
-.mismatch-icon {
-    font-size: 1.35rem;
-    color: #f59e0b;
+.doc-mismatch-banner .mismatch-icon {
+    font-size: 1.5rem;
+    color: #ef4444;
     flex-shrink: 0;
 }
 
-.mismatch-reason {
-    color: #fde68a;
-    font-style: italic;
-}
-
-.mismatch-switch-btn {
-    background: #f59e0b;
-    color: #000000;
-    font-weight: 700;
-    border: none;
-    padding: 0.5rem 1rem;
+/* Inline Error Under Upload Dropzone */
+.upload-inline-error {
+    margin-top: 0.85rem;
+    padding: 0.75rem 1rem;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.4);
     border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: var(--transition-fast);
-    white-space: nowrap;
+    color: #f87171;
+    font-size: 0.875rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    animation: fadeIn 0.25s ease-in-out;
 }
 
-.mismatch-switch-btn:hover {
-    background: #d97706;
-    transform: translateY(-1px);
+.upload-inline-error i {
+    font-size: 1.1rem;
+    color: #ef4444;
 }
 
-/* Verdict Warning Card (Mismatch Gate) */
-.verdict-card.verdict-warning-mismatch {
+/* Verdict Badges (Verified / Suspicious / Fake) */
+.verdict-badge-row {
+    margin: 0.35rem 0 0.5rem 0;
+}
+
+.verdict-status-badge {
+    display: inline-block;
+    padding: 0.3rem 0.8rem;
+    border-radius: var(--radius-full, 9999px);
+    font-size: 0.825rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.badge-verified {
+    background: rgba(34, 197, 94, 0.2);
+    border: 1px solid rgba(34, 197, 94, 0.5);
+    color: #4ade80;
+}
+
+.badge-suspicious {
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid rgba(245, 158, 11, 0.5);
+    color: #fbbf24;
+}
+
+.badge-fake {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.5);
+    color: #f87171;
+}
+
+.verdict-card.verdict-suspicious {
     background: rgba(245, 158, 11, 0.08);
-    border: 1px solid rgba(245, 158, 11, 0.4);
-    box-shadow: 0 4px 20px rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
-.verdict-card.verdict-warning-mismatch .verdict-icon-wrap {
+.verdict-card.verdict-suspicious .verdict-icon-wrap {
     background: rgba(245, 158, 11, 0.2);
     color: #f59e0b;
 }
 
-.verdict-card.verdict-warning-unreadable {
-    background: rgba(148, 163, 184, 0.08);
-    border: 1px solid rgba(148, 163, 184, 0.3);
-}
-
-.verdict-card.verdict-warning-unreadable .verdict-icon-wrap {
-    background: rgba(148, 163, 184, 0.2);
-    color: #94a3b8;
-}
-
-.mismatch-action-container {
-    display: flex;
-    gap: 0.75rem;
+/* Summary Box */
+.summary-box {
     margin-top: 1.25rem;
-    padding-top: 1rem;
-    border-top: 1px solid rgba(245, 158, 11, 0.2);
-    flex-wrap: wrap;
-    width: 100%;
+    padding: 1rem 1.1rem;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
 }
 
-.mismatch-evidence {
-    font-size: 0.825rem;
-    color: #fde68a;
-    font-style: italic;
+.summary-box h4 {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
-.privacy-notice {
-    font-size: 0.8rem;
-    color: var(--text-dim);
-    margin-top: 0.5rem;
+.summary-box p {
+    margin: 0;
+    font-size: 0.925rem;
+    color: var(--text-main);
+    line-height: 1.5;
 }
+
+/* Extracted Fields Section */
+.extracted-fields-section {
+    margin-top: 1.25rem;
+    padding: 1rem 1.1rem;
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.extracted-fields-section h4 {
+    margin: 0 0 0.85rem 0;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.fields-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.85rem;
+}
+
+.field-item {
+    display: flex;
+    flex-direction: column;
+    padding: 0.65rem 0.85rem;
+    background: rgba(11, 15, 25, 0.6);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.field-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+}
+
+.field-value {
+    font-size: 0.925rem;
+    font-weight: 600;
+    color: var(--text-main);
+    word-break: break-word;
+}
+
+/* "Why was this flagged?" Reasons Breakdown Section */
+.why-flagged-section {
+    margin-top: 1.25rem;
+    padding: 1.1rem;
+    background: rgba(239, 68, 68, 0.05);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: var(--radius-md);
+}
+
+.why-flagged-section h4 {
+    margin: 0 0 0.85rem 0;
+    font-size: 0.95rem;
+    color: #fca5a5;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.reasons-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.reason-item {
+    padding: 0.85rem 1rem;
+    border-radius: var(--radius-sm);
+    background: rgba(15, 23, 42, 0.7);
+    border-left: 4px solid var(--border-color);
+}
+
+.reason-item.severity-high {
+    border-left-color: #ef4444;
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.reason-item.severity-medium {
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.reason-item.severity-low {
+    border-left-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.08);
+}
+
+.reason-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.4rem;
+}
+
+.category-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.severity-pill {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.15rem 0.5rem;
+    border-radius: var(--radius-full, 9999px);
+}
+
+.severity-pill.severity-high {
+    background: rgba(239, 68, 68, 0.25);
+    color: #f87171;
+}
+
+.severity-pill.severity-medium {
+    background: rgba(245, 158, 11, 0.25);
+    color: #fbbf24;
+}
+
+.severity-pill.severity-low {
+    background: rgba(59, 130, 246, 0.25);
+    color: #60a5fa;
+}
+
+.reason-finding {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--text-main);
+    line-height: 1.45;
+}
+
 
 
